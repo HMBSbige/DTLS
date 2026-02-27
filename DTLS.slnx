@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/CI/">
+    <File Path=".github/workflows/build-native.yml" />
+    <File Path=".github/workflows/ci.yml" />
+    <File Path=".github/workflows/release.yml" />
+  </Folder>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+    <File Path=".github/renovate.json" />
+    <File Path=".gitignore" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="LICENSE" />
+    <File Path="NuGet.Config" />
+  </Folder>
+  <Project Path="src/DTLS/DTLS.csproj" />
+  <Project Path="tests/DTLS.Tests/DTLS.Tests.csproj" />
+</Solution>

@@ -1,0 +1,63 @@
+name: CI
+on:
+  push:
+    branches:
+      - main
+      - renovate/**
+  pull_request:
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: 1
+  DOTNET_GENERATE_ASPNET_CERTIFICATE: false
+  NET_VERSION: 10.0.x
+
+jobs:
+  rust-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "native -> target"
+      - name: Install Rust
+        run: |
+          rustup set profile minimal
+          rustup toolchain install stable --component clippy,rustfmt
+      - run: cargo fmt --check
+        working-directory: native
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: native
+
+  dotnet-format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.NET_VERSION }}
+      - run: dotnet format -v diag --verify-no-changes
+
+  build-native:
+    uses: ./.github/workflows/build-native.yml
+
+  dotnet-test:
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.NET_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "native -> target"
+      - name: Install Rust
+        run: |
+          rustup set profile minimal
+          rustup toolchain install stable
+      - run: dotnet test -c Release

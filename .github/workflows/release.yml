@@ -1,0 +1,53 @@
+name: Release
+on:
+  push:
+    tags: [ '*' ]
+
+jobs:
+  build-native:
+    uses: ./.github/workflows/build-native.yml
+
+  pack:
+    needs: build-native
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/download-artifact@v8
+      - name: Stage native artifacts
+        run: |
+          for dir in native-*/; do
+            rid=${dir#native-}
+            rid=${rid%/}
+            mkdir -p src/DTLS/runtimes/$rid/native/
+            cp "$dir"/* src/DTLS/runtimes/$rid/native/
+          done
+      - name: Pack
+        working-directory: src/DTLS
+        run: dotnet pack -p:Version=${GITHUB_REF_NAME#v}
+      - name: NuGet Login
+        uses: NuGet/login@v1
+        id: nuget-login
+        with:
+          user: ${{ vars.NUGET_USER }}
+      - name: Push to NuGet
+        working-directory: src/DTLS/bin/Release
+        run: |
+          dotnet nuget push *.nupkg -s https://api.nuget.org/v3/index.json -k ${{ steps.nuget-login.outputs.NUGET_API_KEY }} --skip-duplicate
+          dotnet nuget push *.nupkg -s https://nuget.pkg.github.com/HMBSbige -k ${{ secrets.GITHUB_TOKEN }} --skip-duplicate
+      - name: GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          prerelease: false
+          allowUpdates: true
+          artifactErrorsFailBuild: true
+          artifacts: src/DTLS/bin/Release/*.nupkg
+          immutableCreate: true
+          updateOnlyUnreleased: true

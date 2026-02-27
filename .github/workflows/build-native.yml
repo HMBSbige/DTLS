@@ -1,0 +1,52 @@
+name: Build Native
+on:
+  workflow_call:
+
+env:
+  RUSTFLAGS: --remap-path-prefix=${{ github.workspace }}=.
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { rid: linux-x64,              target: x86_64-unknown-linux-gnu,       os: ubuntu-latest,  use-cross: true }
+          - { rid: linux-arm64,            target: aarch64-unknown-linux-gnu,      os: ubuntu-latest,  use-cross: true }
+          - { rid: linux-loongarch64,      target: loongarch64-unknown-linux-gnu,  os: ubuntu-latest,  use-cross: true }
+          - { rid: linux-musl-x64,         target: x86_64-unknown-linux-musl,      os: ubuntu-latest,  use-cross: true }
+          - { rid: linux-musl-arm64,       target: aarch64-unknown-linux-musl,     os: ubuntu-latest,  use-cross: true }
+          - { rid: linux-musl-loongarch64, target: loongarch64-unknown-linux-musl, os: ubuntu-latest,  use-cross: true }
+          - { rid: win-x64,                target: x86_64-pc-windows-msvc,         os: windows-latest, use-cross: false }
+          - { rid: win-arm64,              target: aarch64-pc-windows-msvc,        os: windows-latest, use-cross: false }
+          - { rid: osx-arm64,              target: aarch64-apple-darwin,           os: macos-latest,   use-cross: false }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "native -> target"
+          key: ${{ matrix.target }}
+      - name: Install Rust
+        run: |
+          rustup set profile minimal
+          rustup toolchain install stable
+          rustup target add ${{ matrix.target }}
+      - name: Install cross
+        if: matrix.use-cross
+        uses: taiki-e/install-action@cross
+      - name: Build (cross)
+        if: matrix.use-cross
+        run: cross build --release --target ${{ matrix.target }}
+        working-directory: native
+      - name: Build (cargo)
+        if: ${{ !matrix.use-cross }}
+        run: cargo build --release --target ${{ matrix.target }}
+        working-directory: native
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-${{ matrix.rid }}
+          path: |
+            native/target/${{ matrix.target }}/release/dtls_native.dll
+            native/target/${{ matrix.target }}/release/libdtls_native.so
+            native/target/${{ matrix.target }}/release/libdtls_native.dylib
+          if-no-files-found: error

@@ -1,0 +1,18 @@
+[package]
+name = "dtls_native"
+edition = "2024"
+publish = false
+authors = ["HMBSbige"]
+repository = "https://github.com/HMBSbige/DTLS"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dimpl = { version = "0.3" }
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+panic = "unwind"

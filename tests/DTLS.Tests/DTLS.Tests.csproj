@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/DTLS/DTLS.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <NativeConfiguration Condition="'$(Configuration)' == 'Debug'">debug</NativeConfiguration>
+    <NativeConfiguration Condition="'$(NativeConfiguration)' == ''">release</NativeConfiguration>
+    <NativeLibDir>$(MSBuildThisFileDirectory)../../native/target/$(NativeConfiguration)/</NativeLibDir>
+  </PropertyGroup>
+
+  <Target Name="BuildNativeLib" BeforeTargets="CopyNativeLib">
+    <Exec Command="cargo build" WorkingDirectory="$(MSBuildThisFileDirectory)../../native" Condition="'$(NativeConfiguration)' == 'debug'" />
+    <Exec Command="cargo build --release" WorkingDirectory="$(MSBuildThisFileDirectory)../../native" Condition="'$(NativeConfiguration)' != 'debug'" />
+  </Target>
+
+  <Target Name="CopyNativeLib" AfterTargets="Build">
+    <ItemGroup>
+      <NativeLib Include="$(NativeLibDir)*dtls_native.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(NativeLib)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

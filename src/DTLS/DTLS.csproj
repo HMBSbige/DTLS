@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>DTLS</PackageId>
+    <Description>High-performance DTLS for .NET</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>dtls</PackageTags>
+    <Copyright>Copyright @ HMBSbige</Copyright>
+    <PackageProjectUrl>https://github.com/HMBSbige/DTLS</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/HMBSbige/DTLS</RepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DTLS.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="runtimes/**/*" Pack="true" PackagePath="runtimes" />
+    <None Include="../../README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+</Project>
