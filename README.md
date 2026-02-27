@@ -13,31 +13,31 @@ High-performance DTLS (Datagram Transport Layer Security) library for .NET, powe
 ### Client
 
 ```csharp
-var options = new DtlsClientOptions
+DtlsClientOptions options = new()
 {
     ServerName = "example.com",
     RemoteCertificateValidation = (cert, chain, errors) => true,
 };
 
-await using var transport = await DtlsTransport.CreateClientAsync(udpTransport, options);
+await using DtlsTransport transport = await DtlsTransport.CreateClientAsync(udpTransport, options);
 await transport.HandshakeAsync();
 
 await transport.SendAsync(data);
-var bytesRead = await transport.ReceiveAsync(buffer);
+int bytesRead = await transport.ReceiveAsync(buffer);
 ```
 
 ### Server
 
 ```csharp
-var options = new DtlsServerOptions
+DtlsServerOptions options = new()
 {
     Certificate = serverCert,
 };
 
-await using var transport = await DtlsTransport.CreateServerAsync(udpTransport, options);
+await using DtlsTransport transport = await DtlsTransport.CreateServerAsync(udpTransport, options);
 await transport.HandshakeAsync();
 
-var bytesRead = await transport.ReceiveAsync(buffer);
+int bytesRead = await transport.ReceiveAsync(buffer);
 await transport.SendAsync(response);
 ```
 
