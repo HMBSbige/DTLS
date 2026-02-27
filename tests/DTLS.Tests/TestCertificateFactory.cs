@@ -98,7 +98,7 @@ internal static class TestCertificateFactory
 		(
 			tmp.Export(X509ContentType.Pfx),
 			default,
-			X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet
+			X509KeyStorageFlags.Exportable
 		);
 	}
 }
