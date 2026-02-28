@@ -99,9 +99,19 @@ fn write_outgoing_to_buffer(s: &mut DtlsSession, buf: &mut [u8]) -> Result<usize
     Ok(offset)
 }
 
+// HACK: remove when dimpl exposes protocol_version()
+// dimpl 0.3.0 does not provide a public API to query the negotiated protocol
+// version. We infer it from the Debug output which contains the Inner enum
+// variant name (e.g. "Client12", "Server12", "Client13", "Server13").
 fn detect_protocol_version(dtls: &dimpl::Dtls) -> u16 {
     let dbg = format!("{:?}", dtls);
-    if dbg.contains("12") { 0x0303 } else { 0x0304 }
+    if dbg.contains("Client12") || dbg.contains("Server12") {
+        0x0303
+    } else if dbg.contains("Client13") || dbg.contains("Server13") {
+        0x0304
+    } else {
+        panic!("detect_protocol_version called in unexpected state: {dbg}");
+    }
 }
 
 fn map_dimpl_error(e: &dimpl::Error) -> DtlsResult {
