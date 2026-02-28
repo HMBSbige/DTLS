@@ -123,7 +123,9 @@ fn drain_output(s: &mut DtlsSession) -> Result<(), dimpl::Error> {
             dimpl::Output::Packet(data) => s.outgoing_pkts.push_back(data.to_vec()),
             dimpl::Output::Connected => {
                 s.handshake_complete = true;
-                s.protocol_version = detect_protocol_version(&s.dtls);
+                if s.protocol_version == 0 {
+                    s.protocol_version = detect_protocol_version(&s.dtls);
+                }
             }
             dimpl::Output::ApplicationData(data) => s.app_data.push_back(data.to_vec()),
             dimpl::Output::PeerCert(der) => {
