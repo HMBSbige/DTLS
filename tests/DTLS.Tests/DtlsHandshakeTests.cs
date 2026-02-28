@@ -474,11 +474,9 @@ public class DtlsHandshakeTests : DtlsTestBase
 		await using DtlsTransport __ = s;
 
 		Assert.Equal(SslProtocols.Tls13, c.Session.Protocol);
-		Assert.NotEqual(default, c.Session.CipherSuite);
 		Assert.NotNull(c.Session.RemoteCertificate);
 
 		Assert.Equal(SslProtocols.Tls13, s.Session.Protocol);
-		Assert.NotEqual(default, s.Session.CipherSuite);
 	}
 
 	[Fact]

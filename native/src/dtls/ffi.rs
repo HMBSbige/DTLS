@@ -19,7 +19,6 @@ pub(crate) struct DtlsOpStatus {
 #[repr(C)]
 pub(crate) struct DtlsConnectionSnapshot {
     pub(crate) protocol: u16,
-    pub(crate) cipher_suite: u16,
     pub(crate) peer_cert_ptr: *const u8,
     pub(crate) peer_cert_len: usize,
     pub(crate) peer_chain_ptr: *const u8,
@@ -386,7 +385,6 @@ pub unsafe extern "C" fn dtls_session_connection_snapshot(session: *const DtlsSe
         let (cert_ptr, cert_len) = s.peer_certs.first().map_or((std::ptr::null(), 0), |c| (c.as_ptr(), c.len()));
         let out = unsafe { &mut *out };
         out.protocol = s.protocol_version;
-        out.cipher_suite = 0xC02B;
         out.peer_cert_ptr = cert_ptr;
         out.peer_cert_len = cert_len;
         out.peer_chain_ptr = if s.peer_chain_framed.is_empty() { std::ptr::null() } else { s.peer_chain_framed.as_ptr() };

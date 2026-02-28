@@ -24,8 +24,6 @@ public sealed class DtlsSession : IDisposable
 
 	public SslProtocols Protocol { get; private set; }
 
-	public TlsCipherSuite CipherSuite { get; private set; }
-
 	public X509Certificate2? RemoteCertificate
 	{
 		get
@@ -288,8 +286,6 @@ public sealed class DtlsSession : IDisposable
 			0x0304 => SslProtocols.Tls13,
 			_ => SslProtocols.None
 		};
-		CipherSuite = (TlsCipherSuite)snap.CipherSuite;
-
 		if (snap.PeerCertLen is 0)
 		{
 			return (null, null);
