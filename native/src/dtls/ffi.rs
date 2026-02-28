@@ -6,6 +6,13 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
+// ── Constants ────────────────────────────────────────────
+
+/// Maximum allowed input/output buffer size (1 MB) to prevent OOM attacks.
+/// DTLS records are typically much smaller, but this provides a reasonable
+/// safety margin while preventing malicious oversized allocations.
+const MAX_BUFFER_SIZE: usize = 1024 * 1024;
+
 // ── C ABI structures ─────────────────────────────────────
 
 /// Status filled by every FFI operation.
@@ -242,7 +249,15 @@ fn create_session(cert_der: &[u8], key_der: &[u8], is_client: bool, version: u32
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dtls_session_new(config: *const DtlsSessionNewConfig, out_session: *mut *mut DtlsSession, out_pkts: *mut u8, out_pkts_cap: usize) -> DtlsCallResult {
     catch_unwind_call_result(|| {
-        if config.is_null() || out_session.is_null() || (out_pkts_cap > 0 && out_pkts.is_null()) {
+        if out_session.is_null() {
+            set_last_error("null pointer");
+            return DtlsCallResult::err(DtlsResult::InvalidInput);
+        }
+        // Defensive: ensure out_session is null on any failure path
+        unsafe {
+            *out_session = std::ptr::null_mut();
+        }
+        if config.is_null() || (out_pkts_cap > 0 && out_pkts.is_null()) {
             set_last_error("null pointer");
             return DtlsCallResult::err(DtlsResult::InvalidInput);
         }
@@ -281,6 +296,10 @@ pub unsafe extern "C" fn dtls_session_feed(session: *mut DtlsSession, input: *co
         let input_copy = if input_len > 0 {
             if input.is_null() {
                 set_last_error("null input pointer with non-zero length");
+                return DtlsCallResult::err(DtlsResult::InvalidInput);
+            }
+            if input_len > MAX_BUFFER_SIZE {
+                set_last_error(format!("input_len {} exceeds maximum {}", input_len, MAX_BUFFER_SIZE));
                 return DtlsCallResult::err(DtlsResult::InvalidInput);
             }
             let mut v = vec![0u8; input_len];
@@ -325,6 +344,10 @@ pub unsafe extern "C" fn dtls_session_send(session: *mut DtlsSession, data: *con
         let data_copy = if data_len > 0 {
             if data.is_null() {
                 set_last_error("null data pointer with non-zero length");
+                return DtlsCallResult::err(DtlsResult::InvalidInput);
+            }
+            if data_len > MAX_BUFFER_SIZE {
+                set_last_error(format!("data_len {} exceeds maximum {}", data_len, MAX_BUFFER_SIZE));
                 return DtlsCallResult::err(DtlsResult::InvalidInput);
             }
             let mut v = vec![0u8; data_len];
