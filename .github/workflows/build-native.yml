@@ -11,9 +11,11 @@ jobs:
           - { rid: linux-x64,              target: x86_64-unknown-linux-gnu,       os: ubuntu-latest,  use-cross: false }
           - { rid: linux-arm64,            target: aarch64-unknown-linux-gnu,      os: ubuntu-latest,  use-cross: true }
           - { rid: linux-loongarch64,      target: loongarch64-unknown-linux-gnu,  os: ubuntu-latest,  use-cross: true }
+          - { rid: linux-riscv64,          target: riscv64gc-unknown-linux-gnu,    os: ubuntu-latest,  use-cross: true }
           - { rid: linux-musl-x64,         target: x86_64-unknown-linux-musl,      os: ubuntu-latest,  use-cross: true }
           - { rid: linux-musl-arm64,       target: aarch64-unknown-linux-musl,     os: ubuntu-latest,  use-cross: true }
           - { rid: linux-musl-loongarch64, target: loongarch64-unknown-linux-musl, os: ubuntu-latest,  use-cross: true }
+          - { rid: linux-musl-riscv64,     target: riscv64gc-unknown-linux-musl,   os: ubuntu-latest,  use-cross: true }
           - { rid: win-x64,                target: x86_64-pc-windows-msvc,         os: windows-latest, use-cross: false }
           - { rid: win-arm64,              target: aarch64-pc-windows-msvc,        os: windows-latest, use-cross: false }
           - { rid: osx-arm64,              target: aarch64-apple-darwin,           os: macos-latest,   use-cross: false }
