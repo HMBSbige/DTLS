@@ -42,6 +42,16 @@ internal static partial class NativeMethods
 		SafeDtlsSessionHandle session,
 		out DtlsConnectionSnapshotNative snapshot);
 
+	[LibraryImport(LibName, EntryPoint = "dtls_session_copy_peer_cert")]
+	public static partial DtlsCallResultNative SessionCopyPeerCert(
+		SafeDtlsSessionHandle session,
+		Span<byte> buf, nuint bufLen);
+
+	[LibraryImport(LibName, EntryPoint = "dtls_session_copy_peer_chain")]
+	public static partial DtlsCallResultNative SessionCopyPeerChain(
+		SafeDtlsSessionHandle session,
+		Span<byte> buf, nuint bufLen);
+
 	[LibraryImport(LibName, EntryPoint = "dtls_session_free")]
 	public static partial void SessionFree(nint session);
 }

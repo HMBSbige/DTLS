@@ -167,7 +167,7 @@ public class DtlsSessionTests : DtlsTestBase
 	[Fact]
 	public void FramedPacketEnumerator_SinglePacket()
 	{
-		byte[] framed = [3, 0, 0xAA, 0xBB, 0xCC];// len=3 LE, then 3 bytes
+		byte[] framed = [3, 0, 0, 0, 0xAA, 0xBB, 0xCC];// len=3 LE u32, then 3 bytes
 		List<byte[]> packets = [];
 
 		foreach (ReadOnlySpan<byte> pkt in new FramedPacketEnumerator(framed))
@@ -182,7 +182,7 @@ public class DtlsSessionTests : DtlsTestBase
 	[Fact]
 	public void FramedPacketEnumerator_MultiplePackets()
 	{
-		byte[] framed = [2, 0, 0x01, 0x02, 1, 0, 0xFF];
+		byte[] framed = [2, 0, 0, 0, 0x01, 0x02, 1, 0, 0, 0, 0xFF];
 		List<byte[]> packets = [];
 
 		foreach (ReadOnlySpan<byte> pkt in new FramedPacketEnumerator(framed))
@@ -198,7 +198,7 @@ public class DtlsSessionTests : DtlsTestBase
 	[Fact]
 	public void FramedPacketEnumerator_TruncatedData_Stops()
 	{
-		byte[] framed = [5, 0, 0x01, 0x02];// claims 5 bytes but only 2 available
+		byte[] framed = [5, 0, 0, 0, 0x01, 0x02];// claims 5 bytes but only 2 available
 		int count = 0;
 
 		foreach (ReadOnlySpan<byte> _ in new FramedPacketEnumerator(framed))
@@ -212,7 +212,7 @@ public class DtlsSessionTests : DtlsTestBase
 	[Fact]
 	public void FramedPacketEnumerator_SingleByte_YieldsNothing()
 	{
-		byte[] framed = [0x01];// less than 2-byte header
+		byte[] framed = [0x01, 0x02, 0x03];// less than 4-byte header
 		int count = 0;
 
 		foreach (ReadOnlySpan<byte> _ in new FramedPacketEnumerator(framed))

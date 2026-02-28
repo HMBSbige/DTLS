@@ -276,7 +276,7 @@ public sealed class DtlsSession : IDisposable
 	/// <summary>
 	/// 记得 dispose：叶子证书和临时中间证书 X509Chain.ChainPolicy.ExtraStore
 	/// </summary>
-	private unsafe (X509Certificate2? PeerCert, X509Chain? Chain) LoadPeerCertificates()
+	private (X509Certificate2? PeerCert, X509Chain? Chain) LoadPeerCertificates()
 	{
 		DtlsCallResultNative r = NativeSessionApi.Snapshot(_handle, out DtlsConnectionSnapshotNative snap);
 		NativeHelper.ThrowIfError(r.Code);
@@ -286,19 +286,33 @@ public sealed class DtlsSession : IDisposable
 			0x0304 => SslProtocols.Tls13,
 			_ => SslProtocols.None
 		};
-		if (snap.PeerCertLen is 0)
+
+		// Probe peer cert length
+		DtlsCallResultNative certProbe = NativeSessionApi.CopyPeerCert(_handle, Span<byte>.Empty);
+		NativeHelper.ThrowIfError(certProbe.Code);
+		if (certProbe.BytesRead is 0)
 		{
 			return (null, null);
 		}
 
-		X509Certificate2 peerCert = X509CertificateLoader.LoadCertificate(new ReadOnlySpan<byte>((void*)snap.PeerCertPtr, (int)snap.PeerCertLen));
+		// Copy peer cert
+		byte[] certBuf = new byte[(int)certProbe.BytesRead];
+		DtlsCallResultNative certCopy = NativeSessionApi.CopyPeerCert(_handle, certBuf);
+		NativeHelper.ThrowIfError(certCopy.Code);
+		X509Certificate2 peerCert = X509CertificateLoader.LoadCertificate(certBuf.AsSpan(0, (int)certCopy.BytesRead));
 
 		X509Chain chain = new();
 		chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
 
-		if (snap.PeerChainLen > 0)
+		// Probe peer chain length
+		DtlsCallResultNative chainProbe = NativeSessionApi.CopyPeerChain(_handle, Span<byte>.Empty);
+		NativeHelper.ThrowIfError(chainProbe.Code);
+		if (chainProbe.BytesRead > 0)
 		{
-			foreach (ReadOnlySpan<byte> der in new FramedPacketEnumerator(new ReadOnlySpan<byte>((void*)snap.PeerChainPtr, (int)snap.PeerChainLen)))
+			byte[] chainBuf = new byte[(int)chainProbe.BytesRead];
+			DtlsCallResultNative chainCopy = NativeSessionApi.CopyPeerChain(_handle, chainBuf);
+			NativeHelper.ThrowIfError(chainCopy.Code);
+			foreach (ReadOnlySpan<byte> der in new FramedPacketEnumerator(chainBuf.AsSpan(0, (int)chainCopy.BytesRead)))
 			{
 				chain.ChainPolicy.ExtraStore.Add(X509CertificateLoader.LoadCertificate(der));
 			}

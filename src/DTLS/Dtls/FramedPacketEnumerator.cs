@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 
 namespace DTLS.Dtls;
 
-/// <summary>Enumerates individual datagrams from [u16_le:len][bytes]... framed output.</summary>
+/// <summary>Enumerates individual datagrams from [u32_le:len][bytes]... framed output.</summary>
 internal ref struct FramedPacketEnumerator(ReadOnlySpan<byte> framed)
 {
 	private ReadOnlySpan<byte> _remaining = framed;
@@ -11,20 +11,20 @@ internal ref struct FramedPacketEnumerator(ReadOnlySpan<byte> framed)
 
 	public bool MoveNext()
 	{
-		if (!BinaryPrimitives.TryReadUInt16LittleEndian(_remaining, out ushort len))
+		if (!BinaryPrimitives.TryReadUInt32LittleEndian(_remaining, out uint len))
 		{
 			return false;
 		}
 
-		_remaining = _remaining.Slice(sizeof(ushort));
+		_remaining = _remaining.Slice(sizeof(uint));
 
-		if (len > _remaining.Length)
+		if (len > (uint)_remaining.Length)
 		{
 			return false;
 		}
 
-		Current = _remaining.Slice(0, len);
-		_remaining = _remaining.Slice(len);
+		Current = _remaining.Slice(0, (int)len);
+		_remaining = _remaining.Slice((int)len);
 		return true;
 	}
 

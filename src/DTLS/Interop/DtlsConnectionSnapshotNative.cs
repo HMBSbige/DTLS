@@ -6,8 +6,4 @@ namespace DTLS.Interop;
 internal struct DtlsConnectionSnapshotNative
 {
 	public ushort Protocol;
-	public nint PeerCertPtr;
-	public nuint PeerCertLen;
-	public nint PeerChainPtr;
-	public nuint PeerChainLen;
 }

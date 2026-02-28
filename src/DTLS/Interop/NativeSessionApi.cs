@@ -60,6 +60,18 @@ internal static class NativeSessionApi
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public static DtlsCallResultNative CopyPeerCert(SafeDtlsSessionHandle handle, Span<byte> buf)
+	{
+		return NativeMethods.SessionCopyPeerCert(handle, buf, (nuint)buf.Length);
+	}
+
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public static DtlsCallResultNative CopyPeerChain(SafeDtlsSessionHandle handle, Span<byte> buf)
+	{
+		return NativeMethods.SessionCopyPeerChain(handle, buf, (nuint)buf.Length);
+	}
+
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	public static DtlsOpResult ToOpResult(in DtlsCallResultNative r)
 	{
 		return new DtlsOpResult

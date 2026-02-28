@@ -15,14 +15,10 @@ pub(crate) struct DtlsOpStatus {
     pub(crate) is_handshaking: u8,
 }
 
-/// Single-call snapshot of connection info (cert pointer lifetime = session).
+/// Single-call snapshot of connection info (no borrowed pointers).
 #[repr(C)]
 pub(crate) struct DtlsConnectionSnapshot {
     pub(crate) protocol: u16,
-    pub(crate) peer_cert_ptr: *const u8,
-    pub(crate) peer_cert_len: usize,
-    pub(crate) peer_chain_ptr: *const u8,
-    pub(crate) peer_chain_len: usize,
 }
 
 /// Unified result returned by every v2 FFI operation.
@@ -131,8 +127,10 @@ fn drain_output(s: &mut DtlsSession) -> Result<(), dimpl::Error> {
             dimpl::Output::PeerCert(der) => {
                 let der = der.to_vec();
                 if !s.peer_certs.is_empty() {
-                    let len_bytes = (der.len() as u16).to_le_bytes();
-                    s.peer_chain_framed.extend_from_slice(&len_bytes);
+                    if der.len() > 0xFF_FFFF {
+                        return Err(dimpl::Error::CertificateError("peer certificate exceeds 16 MiB".into()));
+                    }
+                    s.peer_chain_framed.extend_from_slice(&(der.len() as u32).to_le_bytes());
                     s.peer_chain_framed.extend_from_slice(&der);
                 }
                 s.peer_certs.push(der);
@@ -384,17 +382,106 @@ pub unsafe extern "C" fn dtls_session_connection_snapshot(session: *const DtlsSe
             set_last_error("handshake not complete");
             return DtlsCallResult::err(DtlsResult::DtlsError);
         }
-        let (cert_ptr, cert_len) = s.peer_certs.first().map_or((std::ptr::null(), 0), |c| (c.as_ptr(), c.len()));
         let out = unsafe { &mut *out };
         out.protocol = s.protocol_version;
-        out.peer_cert_ptr = cert_ptr;
-        out.peer_cert_len = cert_len;
-        out.peer_chain_ptr = if s.peer_chain_framed.is_empty() { std::ptr::null() } else { s.peer_chain_framed.as_ptr() };
-        out.peer_chain_len = s.peer_chain_framed.len();
         DtlsCallResult {
             code: DtlsResult::Ok,
             bytes_written: 0,
             bytes_read: 0,
+            status: make_status(s),
+        }
+    })
+}
+
+/// Copy the leaf peer certificate (DER) into a caller-provided buffer.
+/// When `buf` is null or `buf_len` is 0, only returns the required length via `bytes_read`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dtls_session_copy_peer_cert(session: *const DtlsSession, buf: *mut u8, buf_len: usize) -> DtlsCallResult {
+    catch_unwind_call_result(|| {
+        if session.is_null() {
+            set_last_error("null pointer");
+            return DtlsCallResult::err(DtlsResult::InvalidInput);
+        }
+        let s = unsafe { &*session };
+        if !s.handshake_complete {
+            set_last_error("handshake not complete");
+            return DtlsCallResult::err(DtlsResult::DtlsError);
+        }
+        let cert = match s.peer_certs.first() {
+            Some(c) => c,
+            None => {
+                return DtlsCallResult {
+                    code: DtlsResult::Ok,
+                    bytes_written: 0,
+                    bytes_read: 0,
+                    status: make_status(s),
+                };
+            }
+        };
+        if buf.is_null() || buf_len == 0 {
+            return DtlsCallResult {
+                code: DtlsResult::Ok,
+                bytes_written: 0,
+                bytes_read: cert.len(),
+                status: make_status(s),
+            };
+        }
+        if buf_len < cert.len() {
+            set_last_error("output buffer too small");
+            return DtlsCallResult::err(DtlsResult::BufferTooSmall);
+        }
+        let out = unsafe { raw_mut_slice(buf, buf_len) };
+        out[..cert.len()].copy_from_slice(cert);
+        DtlsCallResult {
+            code: DtlsResult::Ok,
+            bytes_written: 0,
+            bytes_read: cert.len(),
+            status: make_status(s),
+        }
+    })
+}
+
+/// Copy the framed peer certificate chain into a caller-provided buffer.
+/// When `buf` is null or `buf_len` is 0, only returns the required length via `bytes_read`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dtls_session_copy_peer_chain(session: *const DtlsSession, buf: *mut u8, buf_len: usize) -> DtlsCallResult {
+    catch_unwind_call_result(|| {
+        if session.is_null() {
+            set_last_error("null pointer");
+            return DtlsCallResult::err(DtlsResult::InvalidInput);
+        }
+        let s = unsafe { &*session };
+        if !s.handshake_complete {
+            set_last_error("handshake not complete");
+            return DtlsCallResult::err(DtlsResult::DtlsError);
+        }
+        let chain = &s.peer_chain_framed;
+        if chain.is_empty() {
+            return DtlsCallResult {
+                code: DtlsResult::Ok,
+                bytes_written: 0,
+                bytes_read: 0,
+                status: make_status(s),
+            };
+        }
+        if buf.is_null() || buf_len == 0 {
+            return DtlsCallResult {
+                code: DtlsResult::Ok,
+                bytes_written: 0,
+                bytes_read: chain.len(),
+                status: make_status(s),
+            };
+        }
+        if buf_len < chain.len() {
+            set_last_error("output buffer too small");
+            return DtlsCallResult::err(DtlsResult::BufferTooSmall);
+        }
+        let out = unsafe { raw_mut_slice(buf, buf_len) };
+        out[..chain.len()].copy_from_slice(chain);
+        DtlsCallResult {
+            code: DtlsResult::Ok,
+            bytes_written: 0,
+            bytes_read: chain.len(),
             status: make_status(s),
         }
     })
