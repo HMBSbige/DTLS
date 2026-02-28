@@ -49,18 +49,15 @@ impl DtlsCallResult {
 }
 
 fn catch_unwind_call_result(f: impl FnOnce() -> DtlsCallResult) -> DtlsCallResult {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
-        Result::Ok(r) => r,
-        Result::Err(e) => {
-            let msg = e
-                .downcast::<String>()
-                .map(|s| *s)
-                .or_else(|e| e.downcast::<&str>().map(|s| s.to_string()))
-                .unwrap_or_else(|_| "unknown panic".into());
-            set_last_error(msg);
-            DtlsCallResult::err(DtlsResult::Panic)
-        }
-    }
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|e| {
+        let msg = e
+            .downcast::<String>()
+            .map(|s| *s)
+            .or_else(|e| e.downcast::<&str>().map(|s| s.to_string()))
+            .unwrap_or_else(|_| "unknown panic".into());
+        set_last_error(msg);
+        DtlsCallResult::err(DtlsResult::Panic)
+    })
 }
 
 // ── Internal helpers ─────────────────────────────────────
