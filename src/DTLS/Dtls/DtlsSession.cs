@@ -177,6 +177,8 @@ public sealed class DtlsSession : IDisposable
 
 			if (_validationCallback is not null)
 			{
+				// Callback may capture cert/chain references. We intentionally do not dispose peerCert/chain
+				// internals in this method when a callback is used; ownership is effectively externalized.
 				if (!_validationCallback(peerCert, chain, errors))
 				{
 					throw new CertificateException("Remote certificate validation failed by user callback.");
@@ -211,6 +213,8 @@ public sealed class DtlsSession : IDisposable
 						chainElement.Certificate.Dispose();
 					}
 				}
+				// Dispose the chain object itself in all cases; with callback mode we keep certificate
+				// objects alive to avoid invalidating references that user code may retain.
 
 				chain.Dispose();
 			}
