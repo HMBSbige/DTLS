@@ -103,18 +103,11 @@ fn write_outgoing_to_buffer(s: &mut DtlsSession, buf: &mut [u8]) -> Result<usize
     Ok(offset)
 }
 
-// HACK: remove when dimpl exposes protocol_version()
-// dimpl 0.3.0 does not provide a public API to query the negotiated protocol
-// version. We infer it from the Debug output which contains the Inner enum
-// variant name (e.g. "Client12", "Server12", "Client13", "Server13").
-fn detect_protocol_version(dtls: &dimpl::Dtls) -> u16 {
-    let dbg = format!("{:?}", dtls);
-    if dbg.contains("Client12") || dbg.contains("Server12") {
-        0x0303
-    } else if dbg.contains("Client13") || dbg.contains("Server13") {
-        0x0304
-    } else {
-        panic!("detect_protocol_version called in unexpected state: {dbg}");
+fn protocol_version_to_u16(ver: dimpl::ProtocolVersion) -> u16 {
+    match ver {
+        dimpl::ProtocolVersion::DTLS1_2 => 0x0303,
+        dimpl::ProtocolVersion::DTLS1_3 => 0x0304,
+        _ => 0,
     }
 }
 
@@ -133,8 +126,10 @@ fn drain_output(s: &mut DtlsSession) -> Result<(), dimpl::Error> {
             dimpl::Output::Packet(data) => s.outgoing_pkts.push_back(data.to_vec()),
             dimpl::Output::Connected => {
                 s.handshake_complete = true;
-                if s.protocol_version == 0 {
-                    s.protocol_version = detect_protocol_version(&s.dtls);
+                if s.protocol_version == 0
+                    && let Some(ver) = s.dtls.protocol_version()
+                {
+                    s.protocol_version = protocol_version_to_u16(ver);
                 }
             }
             dimpl::Output::ApplicationData(data) => s.app_data.push_back(data.to_vec()),
@@ -154,6 +149,7 @@ fn drain_output(s: &mut DtlsSession) -> Result<(), dimpl::Error> {
                 break;
             }
             dimpl::Output::KeyingMaterial(..) => {}
+            _ => {}
         }
     }
     Ok(())
