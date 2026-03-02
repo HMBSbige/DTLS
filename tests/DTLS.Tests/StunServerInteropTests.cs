@@ -9,18 +9,17 @@ public class StunServerInteropTests
 {
 	private const int StunPort = 5349;
 
-	[Theory]
-	[InlineData("stun.wirecloud.de")]
-	[InlineData("stun.hot-chilli.net")]
-	public async Task Client_DtlsHandshake_WithStunServer(string stunHost)
+	[Test]
+	[Arguments("stun.wirecloud.de")]
+	[Arguments("stun.hot-chilli.net")]
+	public async Task Client_DtlsHandshake_WithStunServer(string stunHost, CancellationToken cancellationToken)
 	{
-		Assert.SkipUnless
-		(
-			!string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase),
-			"STUN interop tests are skipped when CI=true."
-		);
+		if (bool.TryParse(Environment.GetEnvironmentVariable("CI"), out bool isCi) && isCi)
+		{
+			Skip.Test("STUN interop tests are skipped when CI=true.");
+		}
 
-		IPAddress[] addresses = await Dns.GetHostAddressesAsync(stunHost, AddressFamily.InterNetwork, TestContext.Current.CancellationToken);
+		IPAddress[] addresses = await Dns.GetHostAddressesAsync(stunHost, AddressFamily.InterNetwork, cancellationToken);
 
 		using UdpClient udp = new();
 		UdpDatagramTransport transport = new(udp, new IPEndPoint(addresses.First(), StunPort));
@@ -31,10 +30,10 @@ public class StunServerInteropTests
 			new DtlsClientOptions { ServerName = stunHost }
 		);
 
-		await client.HandshakeAsync(TestContext.Current.CancellationToken);
+		await client.HandshakeAsync(cancellationToken);
 
-		Assert.False(client.Session.IsHandshaking);
-		Assert.True(client.Session.Protocol is SslProtocols.Tls12 or SslProtocols.Tls13);
-		Assert.NotNull(client.Session.RemoteCertificate);
+		await Assert.That(client.Session.IsHandshaking).IsFalse();
+		await Assert.That(client.Session.Protocol is SslProtocols.Tls12 or SslProtocols.Tls13).IsTrue();
+		await Assert.That(client.Session.RemoteCertificate).IsNotNull();
 	}
 }

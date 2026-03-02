@@ -47,10 +47,13 @@ public class WolfSslInteropTests : InteropTestBase
 		return null;
 	}
 
-	[Fact]
-	public async Task Client_Dtls13Handshake_WithWolfSslServer()
+	[Test]
+	public async Task Client_Dtls13Handshake_WithWolfSslServer(CancellationToken cancellationToken)
 	{
-		Assert.SkipUnless(File.Exists(ServerBin), $"wolfSSL server binary not found: {ServerBin}");
+		if (!File.Exists(ServerBin))
+		{
+			Skip.Test($"wolfSSL server binary not found: {ServerBin}");
+		}
 
 		string tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
 		Directory.CreateDirectory(tmpDir);
@@ -76,7 +79,7 @@ public class WolfSslInteropTests : InteropTestBase
 
 			try
 			{
-				await Task.Delay(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);// Give server time to start
+				await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);// Give server time to start
 
 				using UdpClient udp = new();
 				UdpDatagramTransport transport = new(udp, new IPEndPoint(IPAddress.Loopback, port));
@@ -91,11 +94,11 @@ public class WolfSslInteropTests : InteropTestBase
 					}
 				);
 
-				using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+				using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 				cts.CancelAfter(TimeSpan.FromSeconds(3));
 
 				await client.HandshakeAsync(cts.Token);
-				Assert.Equal(SslProtocols.Tls13, client.Session.Protocol);
+				await Assert.That(client.Session.Protocol).IsEqualTo(SslProtocols.Tls13);
 
 				// send → receive echo
 				Memory<byte> payload = new byte[256];
@@ -105,7 +108,7 @@ public class WolfSslInteropTests : InteropTestBase
 
 				Memory<byte> buffer = new byte[256];
 				int n = await client.ReceiveAsync(buffer, cts.Token);
-				Assert.Equal(payload, buffer.Slice(0, n));
+				await Assert.That(buffer.Slice(0, n).Span.SequenceEqual(payload.Span)).IsTrue();
 			}
 			finally
 			{
@@ -118,10 +121,13 @@ public class WolfSslInteropTests : InteropTestBase
 		}
 	}
 
-	[Fact]
-	public async Task Server_Dtls13Handshake_WithWolfSslClient()
+	[Test]
+	public async Task Server_Dtls13Handshake_WithWolfSslClient(CancellationToken cancellationToken)
 	{
-		Assert.SkipUnless(File.Exists(ClientBin), $"wolfSSL client binary not found: {ClientBin}");
+		if (!File.Exists(ClientBin))
+		{
+			Skip.Test($"wolfSSL client binary not found: {ClientBin}");
+		}
 
 		int port = GetFreeUdpPort();
 		using UdpClient udp = new(new IPEndPoint(IPAddress.Loopback, port));
@@ -150,20 +156,20 @@ public class WolfSslInteropTests : InteropTestBase
 
 		try
 		{
-			using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+			using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 			cts.CancelAfter(TimeSpan.FromSeconds(3));
 
 			const string message = "hello wolfssl!";
 			byte[] buffer = new byte[256];
 			int n = await dtlsServer.ReceiveAsync(buffer, cts.Token);
-			Assert.Equal(message, Encoding.UTF8.GetString(buffer, 0, n));
+			await Assert.That(Encoding.UTF8.GetString(buffer, 0, n)).IsEqualTo(message);
 
 			byte[] reply = "hello-from-server"u8.ToArray();
 			await dtlsServer.SendAsync(reply, cts.Token);
 
 			string output = await wolfClient.StandardOutput.ReadToEndAsync(cts.Token);
-			Assert.Contains("hello-from-server", output);
-			TestContext.Current.TestOutputHelper!.WriteLine(output);
+			await Assert.That(output).Contains("hello-from-server");
+			await TestContext.Current!.OutputWriter.WriteLineAsync(output);
 		}
 		finally
 		{
