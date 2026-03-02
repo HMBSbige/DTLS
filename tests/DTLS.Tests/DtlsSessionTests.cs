@@ -10,8 +10,8 @@ namespace DTLS.Tests;
 
 public class DtlsSessionTests : DtlsTestBase
 {
-	[Fact]
-	public void VerifyCertificate_ReturnsNone_WhenValid()
+	[Test]
+	public async Task VerifyCertificate_ReturnsNone_WhenValid()
 	{
 		using X509Certificate2 cert = TestCertificateFactory.CreateEcdsaSelfSigned();
 		using X509Chain chain = new();
@@ -20,11 +20,11 @@ public class DtlsSessionTests : DtlsTestBase
 		chain.ChainPolicy.CustomTrustStore.Add(cert);
 
 		SslPolicyErrors errors = DtlsSession.VerifyCertificate(chain, cert, "localhost");
-		Assert.Equal(SslPolicyErrors.None, errors);
+		await Assert.That(errors).IsEqualTo(SslPolicyErrors.None);
 	}
 
-	[Fact]
-	public void VerifyCertificate_ReturnsNameMismatch_WhenHostnameWrong()
+	[Test]
+	public async Task VerifyCertificate_ReturnsNameMismatch_WhenHostnameWrong()
 	{
 		using X509Certificate2 cert = TestCertificateFactory.CreateEcdsaSelfSigned();
 		using X509Chain chain = new();
@@ -33,11 +33,11 @@ public class DtlsSessionTests : DtlsTestBase
 		chain.ChainPolicy.CustomTrustStore.Add(cert);
 
 		SslPolicyErrors errors = DtlsSession.VerifyCertificate(chain, cert, "wrong-host.example.com");
-		Assert.True(errors.HasFlag(SslPolicyErrors.RemoteCertificateNameMismatch));
+		await Assert.That(errors).HasFlag(SslPolicyErrors.RemoteCertificateNameMismatch);
 	}
 
-	[Fact]
-	public void VerifyCertificate_ReturnsChainErrors_WhenEkuMismatch()
+	[Test]
+	public async Task VerifyCertificate_ReturnsChainErrors_WhenEkuMismatch()
 	{
 		using X509Certificate2 cert = TestCertificateFactory.CreateWithClientAuthEkuOnly();
 		using X509Chain chain = new();
@@ -47,11 +47,11 @@ public class DtlsSessionTests : DtlsTestBase
 		chain.ChainPolicy.ApplicationPolicy.Add(new Oid("1.3.6.1.5.5.7.3.1"));// ServerAuth
 
 		SslPolicyErrors errors = DtlsSession.VerifyCertificate(chain, cert, "localhost");
-		Assert.True(errors.HasFlag(SslPolicyErrors.RemoteCertificateChainErrors));
+		await Assert.That(errors).HasFlag(SslPolicyErrors.RemoteCertificateChainErrors);
 	}
 
-	[Fact]
-	public void VerifyCertificate_SkipsHostnameCheck_WhenTargetHostNull()
+	[Test]
+	public async Task VerifyCertificate_SkipsHostnameCheck_WhenTargetHostNull()
 	{
 		using X509Certificate2 cert = TestCertificateFactory.CreateEcdsaSelfSigned();
 		using X509Chain chain = new();
@@ -60,31 +60,31 @@ public class DtlsSessionTests : DtlsTestBase
 		chain.ChainPolicy.CustomTrustStore.Add(cert);
 
 		SslPolicyErrors errors = DtlsSession.VerifyCertificate(chain, cert, null);
-		Assert.Equal(SslPolicyErrors.None, errors);
+		await Assert.That(errors).IsEqualTo(SslPolicyErrors.None);
 	}
 
-	[Fact]
-	public void ClientOptions_HasExpectedDefaults()
+	[Test]
+	public async Task ClientOptions_HasExpectedDefaults()
 	{
 		DtlsClientOptions opts = new() { ServerName = "test" };
-		Assert.Null(opts.ClientCertificate);
-		Assert.Null(opts.RemoteCertificateValidation);
-		Assert.Equal(TimeSpan.FromSeconds(15), opts.HandshakeTimeout);
-		Assert.Equal(SslProtocols.None, opts.Version);
+		await Assert.That(opts.ClientCertificate).IsNull();
+		await Assert.That(opts.RemoteCertificateValidation).IsNull();
+		await Assert.That(opts.HandshakeTimeout).IsEqualTo(TimeSpan.FromSeconds(15));
+		await Assert.That(opts.Version).IsEqualTo(SslProtocols.None);
 	}
 
-	[Fact]
-	public void ServerOptions_HasExpectedDefaults()
+	[Test]
+	public async Task ServerOptions_HasExpectedDefaults()
 	{
 		DtlsServerOptions opts = new() { Certificate = Cert };
-		Assert.Null(opts.RemoteCertificateValidation);
-		Assert.Equal(TimeSpan.FromSeconds(15), opts.HandshakeTimeout);
-		Assert.Equal(SslProtocols.None, opts.Version);
-		Assert.False(opts.RequireClientCertificate);
+		await Assert.That(opts.RemoteCertificateValidation).IsNull();
+		await Assert.That(opts.HandshakeTimeout).IsEqualTo(TimeSpan.FromSeconds(15));
+		await Assert.That(opts.Version).IsEqualTo(SslProtocols.None);
+		await Assert.That(opts.RequireClientCertificate).IsFalse();
 	}
 
-	[Fact]
-	public void CreateClient_Throws_WhenVersionUnsupported()
+	[Test]
+	public async Task CreateClient_Throws_WhenVersionUnsupported()
 	{
 		byte[] output = new byte[1];
 		DtlsClientOptions options = new()
@@ -93,11 +93,11 @@ public class DtlsSessionTests : DtlsTestBase
 			Version = (SslProtocols)0x0300
 		};
 
-		Assert.Throws<ArgumentOutOfRangeException>(() => DtlsSession.CreateClient(options, output));
+		await Assert.That(() => DtlsSession.CreateClient(options, output)).Throws<ArgumentOutOfRangeException>();
 	}
 
-	[Fact]
-	public void CreateClient_Throws_WhenVersionCombined()
+	[Test]
+	public async Task CreateClient_Throws_WhenVersionCombined()
 	{
 		byte[] output = new byte[1];
 		DtlsClientOptions options = new()
@@ -106,11 +106,11 @@ public class DtlsSessionTests : DtlsTestBase
 			Version = SslProtocols.Tls12 | SslProtocols.Tls13
 		};
 
-		Assert.Throws<ArgumentOutOfRangeException>(() => DtlsSession.CreateClient(options, output));
+		await Assert.That(() => DtlsSession.CreateClient(options, output)).Throws<ArgumentOutOfRangeException>();
 	}
 
-	[Fact]
-	public void CreateServer_Throws_WhenVersionUnsupported()
+	[Test]
+	public async Task CreateServer_Throws_WhenVersionUnsupported()
 	{
 		byte[] output = new byte[1];
 		DtlsServerOptions options = new()
@@ -119,11 +119,11 @@ public class DtlsSessionTests : DtlsTestBase
 			Version = (SslProtocols)0x0300
 		};
 
-		Assert.Throws<ArgumentOutOfRangeException>(() => DtlsSession.CreateServer(options, output));
+		await Assert.That(() => DtlsSession.CreateServer(options, output)).Throws<ArgumentOutOfRangeException>();
 	}
 
-	[Fact]
-	public void CreateServer_Throws_WhenVersionCombined()
+	[Test]
+	public async Task CreateServer_Throws_WhenVersionCombined()
 	{
 		byte[] output = new byte[1];
 		DtlsServerOptions options = new()
@@ -132,11 +132,11 @@ public class DtlsSessionTests : DtlsTestBase
 			Version = SslProtocols.Tls12 | SslProtocols.Tls13
 		};
 
-		Assert.Throws<ArgumentOutOfRangeException>(() => DtlsSession.CreateServer(options, output));
+		await Assert.That(() => DtlsSession.CreateServer(options, output)).Throws<ArgumentOutOfRangeException>();
 	}
 
-	[Fact]
-	public void CreateClient_ThrowsDtlsException_WhenOutputBufferTooSmall()
+	[Test]
+	public async Task CreateClient_ThrowsDtlsException_WhenOutputBufferTooSmall()
 	{
 		byte[] tinyOutput = new byte[1];
 		DtlsClientOptions options = new()
@@ -145,14 +145,14 @@ public class DtlsSessionTests : DtlsTestBase
 			RemoteCertificateValidation = (_, _, _) => true
 		};
 
-		DtlsException ex = Assert.Throws<DtlsException>(() => DtlsSession.CreateClient(options, tinyOutput));
-
-		Assert.Equal(DtlsResult.BufferTooSmall, ex.ErrorCode);
-		Assert.Contains("output buffer too small", ex.Message);
+		DtlsException? ex = await Assert.That(() => DtlsSession.CreateClient(options, tinyOutput)).Throws<DtlsException>();
+		await Assert.That(ex).IsNotNull();
+		await Assert.That(ex.ErrorCode).IsEqualTo(DtlsResult.BufferTooSmall);
+		await Assert.That(ex.Message).Contains("output buffer too small");
 	}
 
-	[Fact]
-	public void FramedPacketEnumerator_EmptySpan_YieldsNothing()
+	[Test]
+	public async Task FramedPacketEnumerator_EmptySpan_YieldsNothing()
 	{
 		int count = 0;
 
@@ -161,11 +161,11 @@ public class DtlsSessionTests : DtlsTestBase
 			++count;
 		}
 
-		Assert.Equal(0, count);
+		await Assert.That(count).IsEqualTo(0);
 	}
 
-	[Fact]
-	public void FramedPacketEnumerator_SinglePacket()
+	[Test]
+	public async Task FramedPacketEnumerator_SinglePacket()
 	{
 		byte[] framed = [3, 0, 0, 0, 0xAA, 0xBB, 0xCC];// len=3 LE u32, then 3 bytes
 		List<byte[]> packets = [];
@@ -175,12 +175,12 @@ public class DtlsSessionTests : DtlsTestBase
 			packets.Add(pkt.ToArray());
 		}
 
-		Assert.Single(packets);
-		Assert.Equal(new byte[] { 0xAA, 0xBB, 0xCC }, packets[0]);
+		await Assert.That(packets).Count().IsEqualTo(1);
+		await Assert.That(packets[0].AsSpan().SequenceEqual(new byte[] { 0xAA, 0xBB, 0xCC })).IsTrue();
 	}
 
-	[Fact]
-	public void FramedPacketEnumerator_MultiplePackets()
+	[Test]
+	public async Task FramedPacketEnumerator_MultiplePackets()
 	{
 		byte[] framed = [2, 0, 0, 0, 0x01, 0x02, 1, 0, 0, 0, 0xFF];
 		List<byte[]> packets = [];
@@ -190,13 +190,13 @@ public class DtlsSessionTests : DtlsTestBase
 			packets.Add(pkt.ToArray());
 		}
 
-		Assert.Equal(2, packets.Count);
-		Assert.Equal(new byte[] { 0x01, 0x02 }, packets[0]);
-		Assert.Equal(new byte[] { 0xFF }, packets[1]);
+		await Assert.That(packets).Count().IsEqualTo(2);
+		await Assert.That(packets[0].AsSpan().SequenceEqual(new byte[] { 0x01, 0x02 })).IsTrue();
+		await Assert.That(packets[1].AsSpan().SequenceEqual(new byte[] { 0xFF })).IsTrue();
 	}
 
-	[Fact]
-	public void FramedPacketEnumerator_TruncatedData_Stops()
+	[Test]
+	public async Task FramedPacketEnumerator_TruncatedData_Stops()
 	{
 		byte[] framed = [5, 0, 0, 0, 0x01, 0x02];// claims 5 bytes but only 2 available
 		int count = 0;
@@ -206,11 +206,11 @@ public class DtlsSessionTests : DtlsTestBase
 			++count;
 		}
 
-		Assert.Equal(0, count);
+		await Assert.That(count).IsEqualTo(0);
 	}
 
-	[Fact]
-	public void FramedPacketEnumerator_SingleByte_YieldsNothing()
+	[Test]
+	public async Task FramedPacketEnumerator_SingleByte_YieldsNothing()
 	{
 		byte[] framed = [0x01, 0x02, 0x03];// less than 4-byte header
 		int count = 0;
@@ -220,26 +220,26 @@ public class DtlsSessionTests : DtlsTestBase
 			++count;
 		}
 
-		Assert.Equal(0, count);
+		await Assert.That(count).IsEqualTo(0);
 	}
 
-	[Fact]
-	public async Task SendAsync_ThrowsAfterDispose()
+	[Test]
+	public async Task SendAsync_ThrowsAfterDispose(CancellationToken cancellationToken)
 	{
-		(DtlsTransport c, DtlsTransport s) = await HandshakePairAsync(TestContext.Current.CancellationToken);
+		(DtlsTransport c, DtlsTransport s) = await HandshakePairAsync(cancellationToken);
 		await s.DisposeAsync();
 
 		await using DtlsTransport _ = c;
-		await Assert.ThrowsAsync<ObjectDisposedException>(() => s.SendAsync(new byte[] { 1 }, TestContext.Current.CancellationToken).AsTask());
+		await Assert.That(async () => await s.SendAsync(new byte[] { 1 }, cancellationToken)).Throws<ObjectDisposedException>();
 	}
 
-	[Fact]
-	public async Task ReceiveAsync_ThrowsAfterDispose()
+	[Test]
+	public async Task ReceiveAsync_ThrowsAfterDispose(CancellationToken cancellationToken)
 	{
-		(DtlsTransport c, DtlsTransport s) = await HandshakePairAsync(TestContext.Current.CancellationToken);
+		(DtlsTransport c, DtlsTransport s) = await HandshakePairAsync(cancellationToken);
 		await c.DisposeAsync();
 
 		await using DtlsTransport _ = s;
-		await Assert.ThrowsAsync<ObjectDisposedException>(() => c.ReceiveAsync(new byte[1024], TestContext.Current.CancellationToken).AsTask());
+		await Assert.That(async () => await c.ReceiveAsync(new byte[1024], cancellationToken)).Throws<ObjectDisposedException>();
 	}
 }

@@ -65,12 +65,31 @@ internal static class TestCertificateFactory
 		}
 
 		Assert.NotNull(remoteChain);
-		Assert.Single(remoteChain.ChainStatus, s => s.Status is X509ChainStatusFlags.UntrustedRoot);
-		Assert.False(remoteChain.Build(remoteCert));
-		Assert.False(remoteCert.Verify());
 
-		Assert.True(errors.HasFlag(SslPolicyErrors.RemoteCertificateChainErrors));
-		Assert.True((errors & ~SslPolicyErrors.RemoteCertificateChainErrors) is SslPolicyErrors.None);
+		if (remoteChain.ChainStatus.Length is not 1 || remoteChain.ChainStatus[0].Status is not X509ChainStatusFlags.UntrustedRoot)
+		{
+			Assert.Fail("Expected single UntrustedRoot status");
+		}
+
+		if (remoteChain.Build(remoteCert))
+		{
+			Assert.Fail("Chain should not build");
+		}
+
+		if (remoteCert.Verify())
+		{
+			Assert.Fail("Certificate should not verify");
+		}
+
+		if (!errors.HasFlag(SslPolicyErrors.RemoteCertificateChainErrors))
+		{
+			Assert.Fail("Expected RemoteCertificateChainErrors");
+		}
+
+		if ((errors & ~SslPolicyErrors.RemoteCertificateChainErrors) is not SslPolicyErrors.None)
+		{
+			Assert.Fail("Unexpected additional errors");
+		}
 
 		using X509Chain chain = new();
 		chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
