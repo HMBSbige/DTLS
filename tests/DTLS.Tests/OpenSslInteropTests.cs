@@ -30,10 +30,7 @@ public class OpenSslInteropTests : InteropTestBase
 	[Test]
 	public async Task Client_HandshakeAndData_WithOpenSslServer(CancellationToken cancellationToken)
 	{
-		if (!IsOpensslAvailable)
-		{
-			Skip.Test("openssl not found in PATH");
-		}
+		Skip.Unless(IsOpensslAvailable, "openssl not found in PATH");
 
 		string tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
 		Directory.CreateDirectory(tmpDir);
@@ -112,10 +109,7 @@ public class OpenSslInteropTests : InteropTestBase
 	[Test]
 	public async Task Server_HandshakeAndData_WithOpenSslClient(CancellationToken cancellationToken)
 	{
-		if (!IsOpensslAvailable)
-		{
-			Skip.Test("openssl not found in PATH");
-		}
+		Skip.Unless(IsOpensslAvailable, "openssl not found in PATH");
 
 		int port = GetFreeUdpPort();
 		using UdpClient udp = new(new IPEndPoint(IPAddress.Loopback, port));

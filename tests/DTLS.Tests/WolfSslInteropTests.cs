@@ -50,10 +50,7 @@ public class WolfSslInteropTests : InteropTestBase
 	[Test]
 	public async Task Client_Dtls13Handshake_WithWolfSslServer(CancellationToken cancellationToken)
 	{
-		if (!File.Exists(ServerBin))
-		{
-			Skip.Test($"wolfSSL server binary not found: {ServerBin}");
-		}
+		Skip.Unless(File.Exists(ServerBin), $"wolfSSL server binary not found: {ServerBin}");
 
 		string tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
 		Directory.CreateDirectory(tmpDir);
@@ -124,10 +121,7 @@ public class WolfSslInteropTests : InteropTestBase
 	[Test]
 	public async Task Server_Dtls13Handshake_WithWolfSslClient(CancellationToken cancellationToken)
 	{
-		if (!File.Exists(ClientBin))
-		{
-			Skip.Test($"wolfSSL client binary not found: {ClientBin}");
-		}
+		Skip.Unless(File.Exists(ClientBin), $"wolfSSL client binary not found: {ClientBin}");
 
 		int port = GetFreeUdpPort();
 		using UdpClient udp = new(new IPEndPoint(IPAddress.Loopback, port));

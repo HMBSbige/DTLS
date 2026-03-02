@@ -14,10 +14,7 @@ public class StunServerInteropTests
 	[Arguments("stun.hot-chilli.net")]
 	public async Task Client_DtlsHandshake_WithStunServer(string stunHost, CancellationToken cancellationToken)
 	{
-		if (bool.TryParse(Environment.GetEnvironmentVariable("CI"), out bool isCi) && isCi)
-		{
-			Skip.Test("STUN interop tests are skipped when CI=true.");
-		}
+		Skip.When(bool.TryParse(Environment.GetEnvironmentVariable("CI"), out bool isCi) && isCi, "STUN interop tests are skipped when CI=true.");
 
 		IPAddress[] addresses = await Dns.GetHostAddressesAsync(stunHost, AddressFamily.InterNetwork, cancellationToken);
 
