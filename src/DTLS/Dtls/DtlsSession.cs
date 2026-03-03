@@ -24,6 +24,14 @@ public sealed class DtlsSession : IDisposable
 
 	public SslProtocols Protocol { get; private set; }
 
+	/// <summary>
+	/// 获取远程对等方的证书。
+	/// </summary>
+	/// <remarks>
+	/// 生命周期：访问此属性会将证书所有权转移给调用方。
+	/// 一旦访问，调用方负责在不再需要时 dispose 此证书对象。
+	/// 如果从未访问此属性，<see cref="DtlsSession"/> 会在 dispose 时自动释放证书。
+	/// </remarks>
 	public X509Certificate2? RemoteCertificate
 	{
 		get
@@ -175,8 +183,6 @@ public sealed class DtlsSession : IDisposable
 
 			if (_validationCallback is not null)
 			{
-				// Callback may capture cert/chain references. We intentionally do not dispose peerCert/chain
-				// internals in this method when a callback is used; ownership is effectively externalized.
 				if (!_validationCallback(peerCert, chain, errors))
 				{
 					throw new CertificateException("Remote certificate validation failed by user callback.");
@@ -211,8 +217,8 @@ public sealed class DtlsSession : IDisposable
 						chainElement.Certificate.Dispose();
 					}
 				}
-				// Dispose the chain object itself in all cases; with callback mode we keep certificate
-				// objects alive to avoid invalidating references that user code may retain.
+				// X509Chain 对象本身在所有情况下都会被释放；
+				// 当启用回调时，仅保留链内证书对象存活，以避免使用户代码可能保留的证书引用失效
 
 				chain.Dispose();
 			}
@@ -274,7 +280,10 @@ public sealed class DtlsSession : IDisposable
 	}
 
 	/// <summary>
-	/// 记得 dispose：叶子证书和临时中间证书 X509Chain.ChainPolicy.ExtraStore
+	/// 从当前会话快照加载对端叶子证书与证书链。
+	/// 返回对象由调用方接管：叶子证书始终由调用方负责释放；链对象需释放。
+	/// 调用方必须逐个释放 <c>X509Chain.ChainPolicy.ExtraStore</c> 中的证书对象。
+	/// 若后续对该链执行 Build 并产生 <c>X509Chain.ChainElements</c>，其中证书对象也需逐个释放。
 	/// </summary>
 	private (X509Certificate2? PeerCert, X509Chain? Chain) LoadPeerCertificates()
 	{

@@ -8,6 +8,7 @@ public sealed record DtlsServerOptions
 {
 	public required X509Certificate2 Certificate { get; init; }
 
+	/// <inheritdoc cref="DtlsClientOptions.RemoteCertificateValidation"/>
 	public Func<X509Certificate2?, X509Chain?, SslPolicyErrors, bool>? RemoteCertificateValidation { get; init; }
 
 	public TimeSpan HandshakeTimeout { get; init; } = TimeSpan.FromSeconds(15);
