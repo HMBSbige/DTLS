@@ -3,7 +3,6 @@
   "assignees": [
     "HMBSbige"
   ],
-  "dependencyDashboard": false,
   "extends": [
     "config:recommended",
     ":configMigration",
@@ -11,8 +10,5 @@
     ":automergeDigest",
     ":automergeMinor",
     ":disableRateLimiting"
-  ],
-  "labels": [
-    "Automatic"
   ]
 }
