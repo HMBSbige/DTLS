@@ -28,6 +28,15 @@ jobs:
             mkdir -p src/DTLS/runtimes/$rid/native/
             cp "$dir"/* src/DTLS/runtimes/$rid/native/
           done
+          # Also stage android artifacts under linux-bionic RIDs for NativeAOT consumers
+          for arch in x64 arm64; do
+            src="src/DTLS/runtimes/android-$arch/native"
+            dst="src/DTLS/runtimes/linux-bionic-$arch/native"
+            if [ -d "$src" ]; then
+              mkdir -p "$dst"
+              cp "$src"/* "$dst"/
+            fi
+          done
       - name: Pack
         working-directory: src/DTLS
         run: dotnet pack -p:Version=${GITHUB_REF_NAME#v}
