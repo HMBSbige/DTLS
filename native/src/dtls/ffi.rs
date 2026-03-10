@@ -6,29 +6,28 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-// ── Constants ────────────────────────────────────────────
+// ── 常量 ─────────────────────────────────────────────────
 
-/// Maximum allowed input/output buffer size (1 MB) to prevent OOM attacks.
-/// DTLS records are typically much smaller, but this provides a reasonable
-/// safety margin while preventing malicious oversized allocations.
+/// 单次调用输入数据的最大允许长度（1 MiB）。
+/// 用于限制 `dtls_session_feed`/`dtls_session_send` 的入参，避免恶意超大长度触发过量分配。
 const MAX_BUFFER_SIZE: usize = 1024 * 1024;
 
-// ── C ABI structures ─────────────────────────────────────
+// ── C ABI 结构体 ─────────────────────────────────────────
 
-/// Status filled by every FFI operation.
+/// 在返回 `DtlsCallResult` 的 FFI 调用中填充的状态字段。
 #[repr(C)]
 pub(crate) struct DtlsOpStatus {
     pub(crate) timeout_ms: i64,
     pub(crate) is_handshaking: u8,
 }
 
-/// Single-call snapshot of connection info (no borrowed pointers).
+/// 连接信息的单次快照。
 #[repr(C)]
 pub(crate) struct DtlsConnectionSnapshot {
     pub(crate) protocol: u16,
 }
 
-/// Unified result returned by every v2 FFI operation.
+/// 返回 `DtlsCallResult` 的 FFI 导出函数统一使用的结果结构。
 #[repr(C)]
 pub(crate) struct DtlsCallResult {
     pub(crate) code: DtlsResult,
@@ -60,22 +59,22 @@ fn catch_unwind_call_result(f: impl FnOnce() -> DtlsCallResult) -> DtlsCallResul
     })
 }
 
-// ── Internal helpers ─────────────────────────────────────
+// ── 内部辅助函数 ─────────────────────────────────────────
 
-/// Safely convert a raw pointer + length into a mutable slice.
+/// 将“原始指针 + 长度”安全地转换为可变切片。
 ///
 /// # Safety
 ///
-/// When `len > 0`, `ptr` must be valid for `len` bytes and properly aligned.
+/// 当 `len > 0` 时，`ptr` 必须在 `len` 字节范围内可读写且满足对齐要求。
 unsafe fn raw_mut_slice<'a>(ptr: *mut u8, len: usize) -> &'a mut [u8] {
     if len == 0 { &mut [] } else { unsafe { std::slice::from_raw_parts_mut(ptr, len) } }
 }
 
-/// Safely convert a raw pointer + length into an immutable slice.
+/// 将“原始指针 + 长度”安全地转换为只读切片。
 ///
 /// # Safety
 ///
-/// When `len > 0`, `ptr` must be valid for `len` bytes and properly aligned.
+/// 当 `len > 0` 时，`ptr` 必须在 `len` 字节范围内可读且满足对齐要求。
 unsafe fn raw_slice<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
     if len == 0 { &[] } else { unsafe { std::slice::from_raw_parts(ptr, len) } }
 }
@@ -183,7 +182,7 @@ fn flush(s: &mut DtlsSession, out_pkts: &mut [u8]) -> DtlsCallResult {
     }
 }
 
-// ── FFI exports ──────────────────────────────────────────
+// ── FFI 导出函数 ─────────────────────────────────────────
 
 #[repr(C)]
 pub(crate) struct DtlsSessionNewConfig {
@@ -246,7 +245,7 @@ pub unsafe extern "C" fn dtls_session_new(config: *const DtlsSessionNewConfig, o
             set_last_error("null pointer");
             return DtlsCallResult::err(DtlsResult::InvalidInput);
         }
-        // Defensive: ensure out_session is null on any failure path
+        // 防御式处理：任何失败路径都先将 out_session 置空，避免调用方误用脏指针。
         unsafe {
             *out_session = std::ptr::null_mut();
         }
@@ -284,8 +283,7 @@ pub unsafe extern "C" fn dtls_session_feed(session: *mut DtlsSession, input: *co
             set_last_error("null pointer");
             return DtlsCallResult::err(DtlsResult::InvalidInput);
         }
-        // Copy input first via raw pointer to avoid aliasing UB when
-        // the caller passes overlapping input/output buffers.
+        // 先从原始指针复制输入，避免调用方传入输入/输出重叠缓冲区时产生别名 UB。
         let input_copy = if input_len > 0 {
             if input.is_null() {
                 set_last_error("null input pointer with non-zero length");
@@ -332,8 +330,7 @@ pub unsafe extern "C" fn dtls_session_send(session: *mut DtlsSession, data: *con
             set_last_error("null pointer");
             return DtlsCallResult::err(DtlsResult::InvalidInput);
         }
-        // Copy input first via raw pointer to avoid aliasing UB when
-        // the caller passes overlapping data/output buffers.
+        // 先从原始指针复制输入，避免调用方传入数据/输出重叠缓冲区时产生别名 UB。
         let data_copy = if data_len > 0 {
             if data.is_null() {
                 set_last_error("null data pointer with non-zero length");
@@ -419,8 +416,8 @@ pub unsafe extern "C" fn dtls_session_connection_snapshot(session: *const DtlsSe
     })
 }
 
-/// Copy the leaf peer certificate (DER) into a caller-provided buffer.
-/// When `buf` is null or `buf_len` is 0, only returns the required length via `bytes_read`.
+/// 将对端首个证书（DER）复制到调用方缓冲区（当前实现中即 `peer_certs[0]`）。
+/// 当 `buf` 为空或 `buf_len` 为 0 时，不拷贝数据，仅通过 `bytes_read` 返回所需长度。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dtls_session_copy_peer_cert(session: *const DtlsSession, buf: *mut u8, buf_len: usize) -> DtlsCallResult {
     catch_unwind_call_result(|| {
@@ -467,8 +464,9 @@ pub unsafe extern "C" fn dtls_session_copy_peer_cert(session: *const DtlsSession
     })
 }
 
-/// Copy the framed peer certificate chain into a caller-provided buffer.
-/// When `buf` is null or `buf_len` is 0, only returns the required length via `bytes_read`.
+/// 将对端其余证书复制到调用方缓冲区（当前实现中即 `peer_certs[1..]`）。
+/// 链数据格式为重复的 `[u32 小端长度][DER 字节]`。
+/// 当 `buf` 为空或 `buf_len` 为 0 时，不拷贝数据，仅通过 `bytes_read` 返回所需长度。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dtls_session_copy_peer_chain(session: *const DtlsSession, buf: *mut u8, buf_len: usize) -> DtlsCallResult {
     catch_unwind_call_result(|| {
