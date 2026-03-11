@@ -8,19 +8,20 @@ namespace DTLS.Dtls;
 /// Async I/O wrapper over <see cref="DtlsSession"/>.
 /// Bridges the sans-I/O protocol engine with an <see cref="IDatagramTransport"/>.
 /// </summary>
-public class DtlsTransport : IDatagramTransport, IAsyncDisposable, IDisposable
+public sealed class DtlsTransport : IDatagramTransport, IAsyncDisposable, IDisposable
 {
 	private const int IoBufferSize = 65536;
-	private readonly IDatagramTransport _transport;
 	private readonly TimeSpan _handshakeTimeout;
 	private bool _disposed;
+
+	public IDatagramTransport InnerTransport { get; }
 
 	public DtlsSession Session { get; }
 
 	private DtlsTransport(DtlsSession session, IDatagramTransport transport, TimeSpan handshakeTimeout)
 	{
 		Session = session;
-		_transport = transport;
+		InnerTransport = transport;
 		_handshakeTimeout = handshakeTimeout;
 	}
 
@@ -95,7 +96,7 @@ public class DtlsTransport : IDatagramTransport, IAsyncDisposable, IDisposable
 					op = Session.Feed(buf.AsSpan(0, await ReceiveOrThrow(buf, token)), buf);
 				}
 
-				await SendFramedAsync(_transport, buf.AsMemory(0, op.BytesWritten), token);
+				await SendFramedAsync(InnerTransport, buf.AsMemory(0, op.BytesWritten), token);
 			}
 		}
 		catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -112,7 +113,7 @@ public class DtlsTransport : IDatagramTransport, IAsyncDisposable, IDisposable
 
 	// ── IDatagramTransport ──────────────────────────────────
 
-	public virtual async ValueTask SendAsync(ReadOnlyMemory<byte> datagram, CancellationToken cancellationToken = default)
+	public async ValueTask SendAsync(ReadOnlyMemory<byte> datagram, CancellationToken cancellationToken = default)
 	{
 		ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -121,7 +122,7 @@ public class DtlsTransport : IDatagramTransport, IAsyncDisposable, IDisposable
 		try
 		{
 			DtlsOpResult op = Session.Send(datagram.Span, buf);
-			await SendFramedAsync(_transport, buf.AsMemory(0, op.BytesWritten), cancellationToken);
+			await SendFramedAsync(InnerTransport, buf.AsMemory(0, op.BytesWritten), cancellationToken);
 		}
 		finally
 		{
@@ -129,7 +130,7 @@ public class DtlsTransport : IDatagramTransport, IAsyncDisposable, IDisposable
 		}
 	}
 
-	public virtual async ValueTask<int> ReceiveAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+	public async ValueTask<int> ReceiveAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
 	{
 		ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -146,7 +147,7 @@ public class DtlsTransport : IDatagramTransport, IAsyncDisposable, IDisposable
 					return r.BytesRead;
 				}
 
-				int n = await _transport.ReceiveAsync(buf, cancellationToken);
+				int n = await InnerTransport.ReceiveAsync(buf, cancellationToken);
 
 				if (n is 0)
 				{
@@ -154,7 +155,7 @@ public class DtlsTransport : IDatagramTransport, IAsyncDisposable, IDisposable
 				}
 
 				DtlsOpResult op = Session.Feed(buf.AsSpan(0, n), buf);
-				await SendFramedAsync(_transport, buf.AsMemory(0, op.BytesWritten), cancellationToken);
+				await SendFramedAsync(InnerTransport, buf.AsMemory(0, op.BytesWritten), cancellationToken);
 			}
 		}
 		finally
@@ -165,7 +166,7 @@ public class DtlsTransport : IDatagramTransport, IAsyncDisposable, IDisposable
 
 	// ── Dispose ─────────────────────────────────────────────
 
-	protected virtual void Dispose(bool disposing)
+	public void Dispose()
 	{
 		if (_disposed)
 		{
@@ -173,23 +174,12 @@ public class DtlsTransport : IDatagramTransport, IAsyncDisposable, IDisposable
 		}
 
 		_disposed = true;
-
-		if (disposing)
-		{
-			Session.Dispose();
-		}
-	}
-
-	public void Dispose()
-	{
-		Dispose(true);
-		GC.SuppressFinalize(this);
+		Session.Dispose();
 	}
 
 	public ValueTask DisposeAsync()
 	{
-		Dispose(true);
-		GC.SuppressFinalize(this);
+		Dispose();
 		return ValueTask.CompletedTask;
 	}
 
@@ -197,7 +187,7 @@ public class DtlsTransport : IDatagramTransport, IAsyncDisposable, IDisposable
 
 	private async ValueTask<int> ReceiveOrThrow(byte[] buf, CancellationToken cancellationToken = default)
 	{
-		int n = await _transport.ReceiveAsync(buf, cancellationToken);
+		int n = await InnerTransport.ReceiveAsync(buf, cancellationToken);
 
 		if (n > 0)
 		{
