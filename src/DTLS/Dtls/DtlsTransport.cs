@@ -8,7 +8,7 @@ namespace DTLS.Dtls;
 /// Async I/O wrapper over <see cref="DtlsSession"/>.
 /// Bridges the sans-I/O protocol engine with an <see cref="IDatagramTransport"/>.
 /// </summary>
-public sealed class DtlsTransport : IDatagramTransport, IAsyncDisposable
+public class DtlsTransport : IDatagramTransport, IAsyncDisposable, IDisposable
 {
 	private const int IoBufferSize = 65536;
 	private readonly IDatagramTransport _transport;
@@ -112,7 +112,7 @@ public sealed class DtlsTransport : IDatagramTransport, IAsyncDisposable
 
 	// ── IDatagramTransport ──────────────────────────────────
 
-	public async ValueTask SendAsync(ReadOnlyMemory<byte> datagram, CancellationToken cancellationToken = default)
+	public virtual async ValueTask SendAsync(ReadOnlyMemory<byte> datagram, CancellationToken cancellationToken = default)
 	{
 		ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -129,7 +129,7 @@ public sealed class DtlsTransport : IDatagramTransport, IAsyncDisposable
 		}
 	}
 
-	public async ValueTask<int> ReceiveAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+	public virtual async ValueTask<int> ReceiveAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
 	{
 		ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -165,15 +165,31 @@ public sealed class DtlsTransport : IDatagramTransport, IAsyncDisposable
 
 	// ── Dispose ─────────────────────────────────────────────
 
-	public ValueTask DisposeAsync()
+	protected virtual void Dispose(bool disposing)
 	{
 		if (_disposed)
 		{
-			return ValueTask.CompletedTask;
+			return;
 		}
 
 		_disposed = true;
-		Session.Dispose();
+
+		if (disposing)
+		{
+			Session.Dispose();
+		}
+	}
+
+	public void Dispose()
+	{
+		Dispose(true);
+		GC.SuppressFinalize(this);
+	}
+
+	public ValueTask DisposeAsync()
+	{
+		Dispose(true);
+		GC.SuppressFinalize(this);
 		return ValueTask.CompletedTask;
 	}
 
