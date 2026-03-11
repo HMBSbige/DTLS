@@ -3,6 +3,6 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
-    <PackageVersion Include="TUnit" Version="1.18.0" />
+    <PackageVersion Include="TUnit" Version="1.19.22" />
   </ItemGroup>
 </Project>
