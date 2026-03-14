@@ -10,6 +10,7 @@
     <PackageProjectUrl>https://github.com/HMBSbige/DTLS</PackageProjectUrl>
     <RepositoryUrl>https://github.com/HMBSbige/DTLS</RepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <DisableRuntimeMarshalling>true</DisableRuntimeMarshalling>
   </PropertyGroup>
 
   <ItemGroup>

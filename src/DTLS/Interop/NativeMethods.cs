@@ -7,6 +7,7 @@ internal static partial class NativeMethods
 	private const string LibName = "dtls_native";
 
 	[LibraryImport(LibName, EntryPoint = "dtls_last_error_message")]
+	[SuppressGCTransition]
 	public static partial int LastErrorMessage(Span<byte> buf, int bufLen);
 
 	[LibraryImport(LibName, EntryPoint = "dtls_session_new")]
@@ -53,5 +54,6 @@ internal static partial class NativeMethods
 		Span<byte> buf, nuint bufLen);
 
 	[LibraryImport(LibName, EntryPoint = "dtls_session_free")]
+	[SuppressGCTransition]
 	public static partial void SessionFree(nint session);
 }
