@@ -221,7 +221,10 @@ fn create_session(cert_der: &[u8], key_der: &[u8], is_client: bool, version: u32
         }
     };
 
-    let version = match version { SSL_PROTOCOLS_TLS12 | SSL_PROTOCOLS_TLS13 => version, _ => 0 };
+    let version = match version {
+        SSL_PROTOCOLS_TLS12 | SSL_PROTOCOLS_TLS13 => version,
+        _ => 0,
+    };
     let cfg = Arc::new(dimpl::Config::builder().require_client_certificate(require_client_certificate).build().expect("valid config"));
     let now = Instant::now();
     let mut dtls = match version {
