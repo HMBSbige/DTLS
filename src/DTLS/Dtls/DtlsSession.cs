@@ -289,12 +289,7 @@ public sealed class DtlsSession : IDisposable
 	{
 		DtlsCallResultNative r = NativeSessionApi.Snapshot(_handle, out DtlsConnectionSnapshotNative snap);
 		NativeHelper.ThrowIfError(r.Code);
-		Protocol = snap.Protocol switch
-		{
-			0x0303 => SslProtocols.Tls12,
-			0x0304 => SslProtocols.Tls13,
-			_ => SslProtocols.None
-		};
+		Protocol = (SslProtocols)snap.Protocol;
 
 		// Probe peer cert length
 		DtlsCallResultNative certProbe = NativeSessionApi.CopyPeerCert(_handle, Span<byte>.Empty);

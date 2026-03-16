@@ -12,6 +12,11 @@ use std::time::Instant;
 /// 用于限制 `dtls_session_feed`/`dtls_session_send` 的入参，避免恶意超大长度触发过量分配。
 const MAX_BUFFER_SIZE: usize = 1024 * 1024;
 
+/// .NET `SslProtocols.Tls12` 的整数值。
+const SSL_PROTOCOLS_TLS12: u32 = 0x0C00;
+/// .NET `SslProtocols.Tls13` 的整数值。
+const SSL_PROTOCOLS_TLS13: u32 = 0x3000;
+
 // ── C ABI 结构体 ─────────────────────────────────────────
 
 /// 在返回 `DtlsCallResult` 的 FFI 调用中填充的状态字段。
@@ -102,10 +107,10 @@ fn write_outgoing_to_buffer(s: &mut DtlsSession, buf: &mut [u8]) -> Result<usize
     Ok(offset)
 }
 
-fn protocol_version_to_u16(ver: dimpl::ProtocolVersion) -> u16 {
+fn protocol_version_to_ssl_protocols(ver: dimpl::ProtocolVersion) -> u16 {
     match ver {
-        dimpl::ProtocolVersion::DTLS1_2 => 0x0303,
-        dimpl::ProtocolVersion::DTLS1_3 => 0x0304,
+        dimpl::ProtocolVersion::DTLS1_2 => SSL_PROTOCOLS_TLS12 as u16,
+        dimpl::ProtocolVersion::DTLS1_3 => SSL_PROTOCOLS_TLS13 as u16,
         _ => 0,
     }
 }
@@ -128,7 +133,7 @@ fn drain_output(s: &mut DtlsSession) -> Result<(), dimpl::Error> {
                 if s.protocol_version == 0
                     && let Some(ver) = s.dtls.protocol_version()
                 {
-                    s.protocol_version = protocol_version_to_u16(ver);
+                    s.protocol_version = protocol_version_to_ssl_protocols(ver);
                 }
             }
             dimpl::Output::ApplicationData(data) => s.app_data.push_back(data.to_vec()),
@@ -216,12 +221,13 @@ fn create_session(cert_der: &[u8], key_der: &[u8], is_client: bool, version: u32
         }
     };
 
+    let version = match version { SSL_PROTOCOLS_TLS12 | SSL_PROTOCOLS_TLS13 => version, _ => 0 };
     let cfg = Arc::new(dimpl::Config::builder().require_client_certificate(require_client_certificate).build().expect("valid config"));
     let now = Instant::now();
-    let (mut dtls, protocol_version) = match version {
-        0x0C00 => (dimpl::Dtls::new_12(cfg, cert, now), 0x0303u16),
-        0x3000 => (dimpl::Dtls::new_13(cfg, cert, now), 0x0304u16),
-        _ => (dimpl::Dtls::new_auto(cfg, cert, now), 0u16),
+    let mut dtls = match version {
+        SSL_PROTOCOLS_TLS12 => dimpl::Dtls::new_12(cfg, cert, now),
+        SSL_PROTOCOLS_TLS13 => dimpl::Dtls::new_13(cfg, cert, now),
+        _ => dimpl::Dtls::new_auto(cfg, cert, now),
     };
     dtls.set_active(is_client);
 
@@ -234,7 +240,7 @@ fn create_session(cert_der: &[u8], key_der: &[u8], is_client: bool, version: u32
         peer_chain_framed: Vec::new(),
         next_timeout: None,
         poll_buf: vec![0u8; 65536],
-        protocol_version,
+        protocol_version: version as u16,
     })
 }
 
