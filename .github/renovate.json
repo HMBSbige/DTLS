@@ -9,6 +9,6 @@
     ":automergeBranch",
     ":automergeDigest",
     ":automergeMinor",
-    ":disableRateLimiting"
+    "schedule:weekly"
   ]
 }
