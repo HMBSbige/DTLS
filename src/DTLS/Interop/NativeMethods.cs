@@ -53,6 +53,11 @@ internal static partial class NativeMethods
 		SafeDtlsSessionHandle session,
 		Span<byte> buf, nuint bufLen);
 
+	[LibraryImport(LibName, EntryPoint = "dtls_session_close")]
+	public static partial DtlsCallResultNative SessionClose(
+		SafeDtlsSessionHandle session,
+		Span<byte> outPkts, nuint outPktsCap);
+
 	[LibraryImport(LibName, EntryPoint = "dtls_session_free")]
 	[SuppressGCTransition]
 	public static partial void SessionFree(nint session);

@@ -13,6 +13,8 @@ public sealed class DtlsTransport : IDatagramTransport, IAsyncDisposable, IDispo
 	private const int IoBufferSize = 65536;
 	private readonly TimeSpan _handshakeTimeout;
 	private bool _disposed;
+	private byte[]? _cachedCloseNotify;
+	private bool _closeNotifySent;
 
 	public IDatagramTransport InnerTransport { get; }
 
@@ -162,6 +164,50 @@ public sealed class DtlsTransport : IDatagramTransport, IAsyncDisposable, IDispo
 		{
 			ArrayPool<byte>.Shared.Return(buf);
 		}
+	}
+
+	/// <summary>
+	/// 发起优雅关闭：发送 <c>close_notify</c> 告警并刷新输出。
+	/// 不等待对端的 close_notify 应答。
+	/// </summary>
+	public async ValueTask CloseAsync(CancellationToken cancellationToken = default)
+	{
+		ObjectDisposedException.ThrowIf(_disposed, this);
+
+		if (_closeNotifySent)
+		{
+			return;
+		}
+
+		if (_cachedCloseNotify is null)
+		{
+			byte[] buf = ArrayPool<byte>.Shared.Rent(IoBufferSize);
+			try
+			{
+				DtlsOpResult op = Session.Close(buf);
+				if (op.BytesWritten is 0)
+				{
+					// dimpl 在握手中途（版本已固定）对 close() 直接中止会话、不产出任何 datagram；
+					// HandshakePending 则留待握手完成后重试。
+					if (Session.IsLocalClosed)
+					{
+						_closeNotifySent = true;
+					}
+					return;
+				}
+
+				// dimpl 刷出的单个 datagram 除 close_notify 外可能携带已排队的控制记录，沿用 IoBufferSize 缓冲。
+				_cachedCloseNotify = buf.AsSpan(0, op.BytesWritten).ToArray();
+			}
+			finally
+			{
+				ArrayPool<byte>.Shared.Return(buf);
+			}
+		}
+
+		await SendFramedAsync(InnerTransport, _cachedCloseNotify!, cancellationToken);
+		_closeNotifySent = true;
+		_cachedCloseNotify = null;
 	}
 
 	// ── Dispose ─────────────────────────────────────────────

@@ -4,6 +4,8 @@ use std::time::Instant;
 pub(crate) struct DtlsSession {
     pub(crate) dtls: dimpl::Dtls,
     pub(crate) handshake_complete: bool,
+    pub(crate) local_closed: bool,
+    pub(crate) peer_closed: bool,
     pub(crate) app_data: VecDeque<Vec<u8>>,
     pub(crate) outgoing_pkts: VecDeque<Vec<u8>>,
     pub(crate) peer_certs: Vec<Vec<u8>>,

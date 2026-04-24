@@ -22,6 +22,10 @@ public sealed class DtlsSession : IDisposable
 
 	public long TimeoutMs { get; private set; }
 
+	public bool IsLocalClosed { get; private set; }
+
+	public bool IsPeerClosed { get; private set; }
+
 	public SslProtocols Protocol { get; private set; }
 
 	/// <summary>
@@ -66,6 +70,8 @@ public sealed class DtlsSession : IDisposable
 		_validationCallback = validationCallback;
 		IsHandshaking = result.IsHandshaking;
 		TimeoutMs = result.TimeoutMs;
+		IsLocalClosed = result.IsLocalClosed;
+		IsPeerClosed = result.IsPeerClosed;
 	}
 
 	// ── Factory methods ──────────────────────────────────────
@@ -134,18 +140,19 @@ public sealed class DtlsSession : IDisposable
 		return Complete(NativeSessionApi.Send(_handle, plaintext, output));
 	}
 
+	/// <summary>
+	/// 发起优雅关闭：排队一条 <c>close_notify</c> 告警并刷新输出。
+	/// </summary>
+	public DtlsOpResult Close(Span<byte> output)
+	{
+		ObjectDisposedException.ThrowIf(_handle.IsClosed, this);
+		return Complete(NativeSessionApi.Close(_handle, output));
+	}
+
 	public DtlsOpResult TryReceive(Span<byte> buffer)
 	{
 		ObjectDisposedException.ThrowIf(_handle.IsClosed, this);
-		DtlsCallResultNative r = NativeSessionApi.Receive(_handle, buffer);
-
-		if (r.Code is DtlsResult.WouldBlock || r is { Code: DtlsResult.Ok, BytesRead: 0 })
-		{
-			return NativeSessionApi.ToOpResult(in r);
-		}
-
-		NativeHelper.ThrowIfError(r.Code);
-		return Complete(r);
+		return Complete(NativeSessionApi.Receive(_handle, buffer));
 	}
 
 	public void VerifyPeer()
@@ -327,10 +334,12 @@ public sealed class DtlsSession : IDisposable
 
 	private DtlsOpResult Complete(in DtlsCallResultNative r)
 	{
-		NativeHelper.ThrowIfError(r.Code);
 		DtlsOpResult result = NativeSessionApi.ToOpResult(in r);
 		IsHandshaking = result.IsHandshaking;
 		TimeoutMs = result.TimeoutMs;
+		IsLocalClosed = result.IsLocalClosed;
+		IsPeerClosed = result.IsPeerClosed;
+		NativeHelper.ThrowIfError(r.Code);
 		return result;
 	}
 

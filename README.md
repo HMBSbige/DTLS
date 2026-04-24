@@ -24,6 +24,8 @@ await transport.HandshakeAsync();
 
 await transport.SendAsync(data);
 int bytesRead = await transport.ReceiveAsync(buffer);
+
+await transport.CloseAsync();
 ```
 
 ### Server
@@ -59,13 +61,14 @@ public interface IDatagramTransport
 
 Async I/O wrapper that bridges the sans-I/O protocol engine with an `IDatagramTransport`.
 
-| Method              | Description                |
-| ------------------- | -------------------------- |
-| `CreateClientAsync` | Create a DTLS client       |
-| `CreateServerAsync` | Create a DTLS server       |
-| `HandshakeAsync`    | Perform DTLS handshake     |
-| `SendAsync`         | Send encrypted datagram    |
-| `ReceiveAsync`      | Receive decrypted datagram |
+| Method              | Description                            |
+| ------------------- | -------------------------------------- |
+| `CreateClientAsync` | Create a DTLS client                   |
+| `CreateServerAsync` | Create a DTLS server                   |
+| `HandshakeAsync`    | Perform DTLS handshake                 |
+| `SendAsync`         | Send encrypted datagram                |
+| `ReceiveAsync`      | Receive decrypted datagram             |
+| `CloseAsync`        | Send `close_notify` for graceful shutdown |
 
 ### DtlsSession
 
@@ -79,6 +82,7 @@ Sans-I/O DTLS protocol engine for advanced scenarios.
 | `HandleTimeout` | Handle retransmission timeout          |
 | `Send`          | Encrypt plaintext into output          |
 | `TryReceive`    | Try to read decrypted application data |
+| `Close`         | Queue `close_notify` for graceful shutdown |
 | `VerifyPeer`    | Verify peer certificate                |
 
 ### Options

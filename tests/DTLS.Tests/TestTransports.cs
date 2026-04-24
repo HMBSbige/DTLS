@@ -69,6 +69,108 @@ internal sealed class DropFirstSendTransport(IDatagramTransport inner) : IDatagr
 	}
 }
 
+/// <summary>
+/// 统计底层 send 次数；用于断言 CloseAsync 是否误发握手帧。
+/// </summary>
+internal sealed class CountingTransport(IDatagramTransport inner) : IDatagramTransport
+{
+	private int _sendCount;
+
+	public int SendCount => Volatile.Read(ref _sendCount);
+
+	public ValueTask<int> ReceiveAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+	{
+		return inner.ReceiveAsync(buffer, cancellationToken);
+	}
+
+	public ValueTask SendAsync(ReadOnlyMemory<byte> datagram, CancellationToken cancellationToken = default)
+	{
+		Interlocked.Increment(ref _sendCount);
+		return inner.SendAsync(datagram, cancellationToken);
+	}
+}
+
+/// <summary>
+/// 仅在 <see cref="Arm"/> 武装后对下一次 send 抛出指定异常，之后恢复正常。
+/// 用于复现瞬时发送失败场景。
+/// </summary>
+internal sealed class FailNextSendTransport(IDatagramTransport inner, Exception exception) : IDatagramTransport
+{
+	private int _armed;
+
+	public void Arm()
+	{
+		Interlocked.Exchange(ref _armed, 1);
+	}
+
+	public ValueTask<int> ReceiveAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+	{
+		return inner.ReceiveAsync(buffer, cancellationToken);
+	}
+
+	public ValueTask SendAsync(ReadOnlyMemory<byte> datagram, CancellationToken cancellationToken = default)
+	{
+		if (Interlocked.CompareExchange(ref _armed, 0, 1) is 1)
+		{
+			return ValueTask.FromException(exception);
+		}
+
+		return inner.SendAsync(datagram, cancellationToken);
+	}
+}
+
+/// <summary>
+/// 仅在 <see cref="Arm"/> 后对第一/第二次 send 互换顺序，其余 send 原样透传。
+/// 用于模拟 DTLS 1.3 下 close_notify 早于 pre-close app data 到达对端的乱序场景。
+/// </summary>
+internal sealed class ArmedSwapTransport(IDatagramTransport inner) : IDatagramTransport
+{
+	private readonly object _lock = new();
+	private bool _armed;
+	private byte[]? _held;
+
+	public void Arm()
+	{
+		lock (_lock)
+		{
+			_armed = true;
+		}
+	}
+
+	public ValueTask<int> ReceiveAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+	{
+		return inner.ReceiveAsync(buffer, cancellationToken);
+	}
+
+	public async ValueTask SendAsync(ReadOnlyMemory<byte> datagram, CancellationToken cancellationToken = default)
+	{
+		byte[]? heldToFlush = null;
+
+		lock (_lock)
+		{
+			if (_armed && _held is null)
+			{
+				_held = datagram.ToArray();
+				return;
+			}
+
+			if (_armed && _held is not null)
+			{
+				heldToFlush = _held;
+				_held = null;
+				_armed = false;
+			}
+		}
+
+		await inner.SendAsync(datagram, cancellationToken);
+
+		if (heldToFlush is not null)
+		{
+			await inner.SendAsync(heldToFlush, cancellationToken);
+		}
+	}
+}
+
 internal sealed class UdpDatagramTransport(UdpClient udp, IPEndPoint? remote = null) : IDatagramTransport
 {
 	private IPEndPoint? _remote = remote;

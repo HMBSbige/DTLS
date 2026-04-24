@@ -72,6 +72,12 @@ internal static class NativeSessionApi
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public static DtlsCallResultNative Close(SafeDtlsSessionHandle handle, Span<byte> output)
+	{
+		return NativeMethods.SessionClose(handle, output, (nuint)output.Length);
+	}
+
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	public static DtlsOpResult ToOpResult(in DtlsCallResultNative r)
 	{
 		return new DtlsOpResult
@@ -79,7 +85,9 @@ internal static class NativeSessionApi
 			BytesWritten = (int)r.BytesWritten,
 			BytesRead = (int)r.BytesRead,
 			TimeoutMs = r.Status.TimeoutMs,
-			IsHandshaking = r.Status.IsHandshaking is not 0
+			IsHandshaking = r.Status.IsHandshaking is not 0,
+			IsLocalClosed = r.Status.IsLocalClosed is not 0,
+			IsPeerClosed = r.Status.IsPeerClosed is not 0
 		};
 	}
 }

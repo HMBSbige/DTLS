@@ -7,4 +7,6 @@ internal struct DtlsOpStatusNative
 {
 	public long TimeoutMs;
 	public byte IsHandshaking;
+	public byte IsLocalClosed;
+	public byte IsPeerClosed;
 }
