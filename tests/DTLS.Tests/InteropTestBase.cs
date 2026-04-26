@@ -6,6 +6,11 @@ namespace DTLS.Tests;
 
 public abstract class InteropTestBase : DtlsTestBase
 {
+	[Before(Test)]
+	public virtual void SkipUnlessInteropDependencyAvailable()
+	{
+	}
+
 	protected static (string certPath, string keyPath) ExportPem(X509Certificate2 cert, string dir)
 	{
 		string certPath = Path.Combine(dir, "cert.pem");

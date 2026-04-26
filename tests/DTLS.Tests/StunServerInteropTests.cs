@@ -9,13 +9,17 @@ public class StunServerInteropTests
 {
 	private const int StunPort = 5349;
 
+	[Before(Test)]
+	public void SkipWhenRunningInCi()
+	{
+		Skip.When(bool.TryParse(Environment.GetEnvironmentVariable("CI"), out bool isCi) && isCi, "STUN interop tests are skipped when CI=true.");
+	}
+
 	[Test]
 	[Arguments("stun.wirecloud.de")]
 	[Arguments("stun.hot-chilli.net")]
 	public async Task Client_DtlsHandshake_WithStunServer(string stunHost, CancellationToken cancellationToken)
 	{
-		Skip.When(bool.TryParse(Environment.GetEnvironmentVariable("CI"), out bool isCi) && isCi, "STUN interop tests are skipped when CI=true.");
-
 		IPAddress[] addresses = await Dns.GetHostAddressesAsync(stunHost, AddressFamily.InterNetwork, cancellationToken);
 
 		using UdpClient udp = new();

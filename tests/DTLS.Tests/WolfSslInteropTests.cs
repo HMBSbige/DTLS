@@ -60,7 +60,7 @@ public class WolfSslInteropTests : InteropTestBase
 			(string certPath, string keyPath) = ExportPem(Cert, tmpDir);
 			int port = GetFreeUdpPort();
 			// -u = DTLS, -v 4 = 1.3, -d = skip peer verify, -e = echo
-			using Process server = Process.Start
+			using Process? server = Process.Start
 			(
 				new ProcessStartInfo
 				(
@@ -72,7 +72,8 @@ public class WolfSslInteropTests : InteropTestBase
 					RedirectStandardOutput = true,
 					CreateNoWindow = true
 				}
-			)!;
+			);
+			Assert.NotNull(server);
 
 			try
 			{
@@ -134,7 +135,7 @@ public class WolfSslInteropTests : InteropTestBase
 		);
 
 		// -u = DTLS, -v 4 = 1.3, -d = skip peer verify
-		using Process wolfClient = Process.Start
+		using Process? wolfClient = Process.Start
 		(
 			new ProcessStartInfo
 			(
@@ -146,7 +147,8 @@ public class WolfSslInteropTests : InteropTestBase
 				RedirectStandardOutput = true,
 				CreateNoWindow = true
 			}
-		)!;
+		);
+		Assert.NotNull(wolfClient);
 
 		try
 		{

@@ -9,6 +9,11 @@ namespace DTLS.Tests;
 
 public class OpenSslInteropTests : InteropTestBase
 {
+	public override void SkipUnlessInteropDependencyAvailable()
+	{
+		Skip.Unless(IsOpensslAvailable, "openssl not found in PATH");
+	}
+
 	private static readonly bool IsOpensslAvailable = CheckOpenSsl();
 
 	private static bool CheckOpenSsl()
@@ -30,8 +35,6 @@ public class OpenSslInteropTests : InteropTestBase
 	[Test]
 	public async Task Client_HandshakeAndData_WithOpenSslServer(CancellationToken cancellationToken)
 	{
-		Skip.Unless(IsOpensslAvailable, "openssl not found in PATH");
-
 		string tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
 		Directory.CreateDirectory(tmpDir);
 
@@ -40,7 +43,7 @@ public class OpenSslInteropTests : InteropTestBase
 			(string certPath, string keyPath) = ExportPem(Cert, tmpDir);
 			int port = GetFreeUdpPort();
 
-			using Process server = Process.Start
+			using Process? server = Process.Start
 			(
 				new ProcessStartInfo
 				(
@@ -53,7 +56,8 @@ public class OpenSslInteropTests : InteropTestBase
 					RedirectStandardOutput = true,
 					CreateNoWindow = true
 				}
-			)!;
+			);
+			Assert.NotNull(server);
 
 			try
 			{
@@ -109,8 +113,6 @@ public class OpenSslInteropTests : InteropTestBase
 	[Test]
 	public async Task Server_HandshakeAndData_WithOpenSslClient(CancellationToken cancellationToken)
 	{
-		Skip.Unless(IsOpensslAvailable, "openssl not found in PATH");
-
 		int port = GetFreeUdpPort();
 		using UdpClient udp = new(new IPEndPoint(IPAddress.Loopback, port));
 		UdpDatagramTransport transport = new(udp);
@@ -121,7 +123,7 @@ public class OpenSslInteropTests : InteropTestBase
 			new DtlsServerOptions { Certificate = Cert }
 		);
 
-		using Process opensslClient = Process.Start
+		using Process? opensslClient = Process.Start
 		(
 			new ProcessStartInfo
 			(
@@ -133,7 +135,8 @@ public class OpenSslInteropTests : InteropTestBase
 				RedirectStandardOutput = true,
 				CreateNoWindow = true
 			}
-		)!;
+		);
+		Assert.NotNull(opensslClient);
 
 		try
 		{
