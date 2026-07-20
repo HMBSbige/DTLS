@@ -117,18 +117,13 @@ fn protocol_version_to_ssl_protocols(ver: dimpl::ProtocolVersion) -> u16 {
     }
 }
 
-// dimpl 0.7.x 的 HandshakePending 可重试；其他公开错误均为连接级 fatal。
 fn record_dimpl_error(s: &mut DtlsSession, e: &dimpl::Error) -> DtlsCallResult {
     let code = match e {
         dimpl::Error::CertificateError(_) => DtlsResult::CertificateError,
         _ => DtlsResult::DtlsError,
     };
-    let message = e.to_string();
-    if !matches!(e, dimpl::Error::HandshakePending) {
-        s.fatal_error = Some((code, message.clone()));
-    }
-    set_last_error(message);
-    DtlsCallResult::err_with(code, make_status(s))
+    s.fatal_error = Some((code, e.to_string()));
+    fatal_error_result(s).expect("fatal_error just set")
 }
 
 fn drain_output(s: &mut DtlsSession) -> Result<(), DtlsCallResult> {
@@ -502,22 +497,10 @@ pub unsafe extern "C" fn dtls_session_close(session: *mut DtlsSession, out_pkts:
         let body = |s: &mut DtlsSession| {
             let out_buf = unsafe { raw_mut_slice(out_pkts, out_pkts_cap) };
             if !s.local_closed {
-                match s.dtls.close() {
-                    Ok(()) => {
-                        s.local_closed = true;
-                    }
-                    Err(dimpl::Error::HandshakePending) => {
-                        // 版本未决时不得 flush，否则待重传的握手 flight 会被误作 close_notify。
-                        // 保留状态，握手完成后可重试 CloseAsync。
-                        return DtlsCallResult {
-                            code: DtlsResult::Ok,
-                            bytes_written: 0,
-                            bytes_read: 0,
-                            status: make_status(s),
-                        };
-                    }
-                    Err(e) => return record_dimpl_error(s, &e),
+                if let Err(e) = s.dtls.close() {
+                    return record_dimpl_error(s, &e);
                 }
+                s.local_closed = true;
             }
             flush(s, out_buf)
         };

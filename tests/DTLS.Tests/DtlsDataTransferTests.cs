@@ -149,6 +149,25 @@ public class DtlsDataTransferTests : DtlsTestBase
 	}
 
 	[Test]
+	public async Task SendAsync_BeforeHandshakeIsFatal(CancellationToken cancellationToken)
+	{
+		(IDatagramTransport clientTransport, IDatagramTransport _) = CreateTransportPair();
+
+		await using DtlsTransport client = await DtlsTransport.CreateClientAsync
+		(
+			clientTransport,
+			new DtlsClientOptions { ServerName = "localhost", RemoteCertificateValidation = (_, _, _) => true }
+		);
+
+		await Assert.That
+		(
+			async () => await client.SendAsync(new byte[] { 1 }, cancellationToken)
+		).Throws<DtlsException>();
+
+		await Assert.That(client.Session.IsHandshaking).IsFalse();
+	}
+
+	[Test]
 	[Arguments(8192)]
 	[Arguments(16384)]
 	[Arguments(16385)]
@@ -201,7 +220,7 @@ public class DtlsDataTransferTests : DtlsTestBase
 		await using DtlsTransport _ = client;
 
 		await server.DisposeAsync();
-		await server.DisposeAsync();// second call should not throw
+		await server.DisposeAsync();
 	}
 
 	[Test]
@@ -318,7 +337,6 @@ public class DtlsDataTransferTests : DtlsTestBase
 		clientTransport.Arm();
 		await Assert.That(async () => await c.CloseAsync(cancellationToken)).Throws<InvalidOperationException>();
 
-		// 瞬时失败后重试必须真实投递 close_notify
 		await c.CloseAsync(cancellationToken);
 
 		await DrivePeerCloseAsync(s, cancellationToken);
@@ -327,34 +345,22 @@ public class DtlsDataTransferTests : DtlsTestBase
 	}
 
 	[Test]
-	public async Task CloseAsync_BeforeHandshakeIsNoopAndRetriable(CancellationToken cancellationToken)
+	public async Task CloseAsync_BeforeHandshakeIsFatal(CancellationToken cancellationToken)
 	{
-		(IDatagramTransport clientTransport, IDatagramTransport serverTransport) = CreateTransportPair();
+		(IDatagramTransport clientTransport, IDatagramTransport _) = CreateTransportPair();
 
 		await using DtlsTransport c = await DtlsTransport.CreateClientAsync
 		(
 			clientTransport,
 			new DtlsClientOptions { ServerName = "localhost", RemoteCertificateValidation = (_, _, _) => true }
 		);
-		await using DtlsTransport s = await DtlsTransport.CreateServerAsync
+
+		await Assert.That
 		(
-			serverTransport,
-			new DtlsServerOptions { Certificate = Cert }
-		);
+			async () => await c.CloseAsync(cancellationToken)
+		).Throws<DtlsException>();
 
-		// 握手尚未完成时调用 CloseAsync：dimpl HandshakePending，不得把会话闩死
-		await c.CloseAsync(cancellationToken);
-		await Assert.That(c.Session.IsLocalClosed).IsFalse();
-
-		await Task.WhenAll
-		(
-			c.HandshakeAsync(cancellationToken).AsTask(),
-			s.HandshakeAsync(cancellationToken).AsTask()
-		);
-
-		// 握手完成后再次 CloseAsync 必须真实生效
-		await c.CloseAsync(cancellationToken);
-		await Assert.That(c.Session.IsLocalClosed).IsTrue();
+		await Assert.That(c.Session.IsHandshaking).IsFalse();
 	}
 
 	[Test]
@@ -369,27 +375,18 @@ public class DtlsDataTransferTests : DtlsTestBase
 			new DtlsClientOptions { ServerName = "localhost", RemoteCertificateValidation = (_, _, _) => true }
 		);
 
-		// CreateClientAsync 会发出初始 ClientHello
-		int sendsAfterCreate = clientTransport.SendCount;
-		await Assert.That(sendsAfterCreate).IsEqualTo(1);
+		int sendsBeforeClose = clientTransport.SendCount;
+		await Assert.That(sendsBeforeClose).IsGreaterThan(0);
 
-		// 等重传定时器到期：握手期 CloseAsync 不得产出任何数据（不得把重传握手 flight 当 close_notify 发出），
-		// 也不得把会话标记为已关闭或短路后续重试。
+		// 等重传定时器到期：握手期 CloseAsync 不得把重传握手 flight 当 close_notify 发出。
 		if (c.Session.TimeoutMs > 0)
 		{
 			await Task.Delay((int)c.Session.TimeoutMs + 50, cancellationToken);
 		}
 
-		await c.CloseAsync(cancellationToken);
+		await Assert.That(async () => await c.CloseAsync(cancellationToken)).Throws<DtlsException>();
 
-		await Assert.That(clientTransport.SendCount).IsEqualTo(sendsAfterCreate);
-		await Assert.That(c.Session.IsLocalClosed).IsFalse();
-		await Assert.That(c.Session.IsHandshaking).IsTrue();
-
-		// 再次 CloseAsync 仍必须是合法 no-op（不短路也不抛），握手完成前都应保持可重试
-		await c.CloseAsync(cancellationToken);
-		await Assert.That(clientTransport.SendCount).IsEqualTo(sendsAfterCreate);
-		await Assert.That(c.Session.IsLocalClosed).IsFalse();
+		await Assert.That(clientTransport.SendCount).IsEqualTo(sendsBeforeClose);
 	}
 
 	[Test]
@@ -416,8 +413,6 @@ public class DtlsDataTransferTests : DtlsTestBase
 		await Assert.That(c.Session.IsHandshaking).IsFalse();
 		await Assert.That(c.Session.TimeoutMs).IsEqualTo(-1);
 
-		// 原始失败序列：CloseAsync(); HandshakeAsync();
-		// 不得再抛 ArgumentOutOfRangeException；应以 DtlsException 明确报告会话已关闭。
 		await Assert.That(async () => await c.HandshakeAsync(cancellationToken)).Throws<DtlsException>();
 	}
 
@@ -472,7 +467,6 @@ public class DtlsDataTransferTests : DtlsTestBase
 		await c.CloseAsync(cancellationToken);
 		await Assert.That(c.Session.IsLocalClosed).IsTrue();
 
-		// 本端已 close 后再发送会走 Rust 错误路径：异常必须抛，但 IsLocalClosed 不得被清零
 		await Assert.That(async () => await c.SendAsync(new byte[] { 1, 2, 3 }, cancellationToken)).Throws<DtlsException>();
 		await Assert.That(c.Session.IsLocalClosed).IsTrue();
 	}
@@ -540,7 +534,6 @@ public class DtlsDataTransferTests : DtlsTestBase
 
 		await c.CloseAsync(cancellationToken);
 
-		// 驱动 server 处理 close_notify
 		await DrivePeerCloseAsync(s, cancellationToken);
 
 		// DTLS 1.3 半关：server 收到对端 close_notify 后仍可主动发自己的 close_notify
