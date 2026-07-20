@@ -149,19 +149,7 @@ fn drain_output(s: &mut DtlsSession) -> Result<(), DtlsCallResult> {
                 }
             }
             dimpl::Output::ApplicationData(data) => s.app_data.push_back(data.to_vec()),
-            dimpl::Output::PeerCert(der) => {
-                let der = der.to_vec();
-                if !s.peer_certs.is_empty() {
-                    if der.len() > 0xFF_FFFF {
-                        // 本层链帧封装的限制而非 dimpl 连接级错误，刻意不锁存 fatal_error。
-                        set_last_error("peer certificate exceeds 16 MiB");
-                        return Err(DtlsCallResult::err_with(DtlsResult::CertificateError, make_status(s)));
-                    }
-                    s.peer_chain_framed.extend_from_slice(&(der.len() as u32).to_le_bytes());
-                    s.peer_chain_framed.extend_from_slice(&der);
-                }
-                s.peer_certs.push(der);
-            }
+            dimpl::Output::PeerCert(der) => s.peer_cert = Some(der.to_vec()),
             dimpl::Output::Timeout(t) => {
                 s.next_timeout = Some(t);
                 break;
@@ -286,8 +274,7 @@ fn create_session(cert_der: &[u8], key_der: &[u8], is_client: bool, version: u32
         peer_closed: false,
         app_data: VecDeque::new(),
         outgoing_pkts: VecDeque::new(),
-        peer_certs: Vec::new(),
-        peer_chain_framed: Vec::new(),
+        peer_cert: None,
         next_timeout: None,
         poll_buf: vec![0u8; 65536],
         protocol_version: version as u16,
@@ -475,7 +462,7 @@ pub unsafe extern "C" fn dtls_session_copy_peer_cert(session: *const DtlsSession
             set_last_error("handshake not complete");
             return DtlsCallResult::err_with(DtlsResult::DtlsError, make_status(s));
         }
-        let cert = match s.peer_certs.first() {
+        let cert = match s.peer_cert.as_ref() {
             Some(c) => c,
             None => {
                 return DtlsCallResult {
@@ -504,52 +491,6 @@ pub unsafe extern "C" fn dtls_session_copy_peer_cert(session: *const DtlsSession
             code: DtlsResult::Ok,
             bytes_written: 0,
             bytes_read: cert.len(),
-            status: make_status(s),
-        }
-    })
-}
-
-/// 查询或复制对端其余证书，编码为重复的 `[u32 小端长度][DER 字节]`。
-/// 空指针或零长度缓冲区仅返回所需长度。
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn dtls_session_copy_peer_chain(session: *const DtlsSession, buf: *mut u8, buf_len: usize) -> DtlsCallResult {
-    catch_unwind_call_result(|| {
-        if session.is_null() {
-            set_last_error("null pointer");
-            return DtlsCallResult::err(DtlsResult::InvalidInput);
-        }
-        let s = unsafe { &*session };
-        if !s.handshake_complete {
-            set_last_error("handshake not complete");
-            return DtlsCallResult::err_with(DtlsResult::DtlsError, make_status(s));
-        }
-        let chain = &s.peer_chain_framed;
-        if chain.is_empty() {
-            return DtlsCallResult {
-                code: DtlsResult::Ok,
-                bytes_written: 0,
-                bytes_read: 0,
-                status: make_status(s),
-            };
-        }
-        if buf.is_null() || buf_len == 0 {
-            return DtlsCallResult {
-                code: DtlsResult::Ok,
-                bytes_written: 0,
-                bytes_read: chain.len(),
-                status: make_status(s),
-            };
-        }
-        if buf_len < chain.len() {
-            set_last_error("output buffer too small");
-            return DtlsCallResult::err_with(DtlsResult::BufferTooSmall, make_status(s));
-        }
-        let out = unsafe { raw_mut_slice(buf, buf_len) };
-        out[..chain.len()].copy_from_slice(chain);
-        DtlsCallResult {
-            code: DtlsResult::Ok,
-            bytes_written: 0,
-            bytes_read: chain.len(),
             status: make_status(s),
         }
     })

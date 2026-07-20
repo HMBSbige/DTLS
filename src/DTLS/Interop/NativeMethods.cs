@@ -48,11 +48,6 @@ internal static partial class NativeMethods
 		SafeDtlsSessionHandle session,
 		Span<byte> buf, nuint bufLen);
 
-	[LibraryImport(LibName, EntryPoint = "dtls_session_copy_peer_chain")]
-	public static partial DtlsCallResultNative SessionCopyPeerChain(
-		SafeDtlsSessionHandle session,
-		Span<byte> buf, nuint bufLen);
-
 	[LibraryImport(LibName, EntryPoint = "dtls_session_close")]
 	public static partial DtlsCallResultNative SessionClose(
 		SafeDtlsSessionHandle session,

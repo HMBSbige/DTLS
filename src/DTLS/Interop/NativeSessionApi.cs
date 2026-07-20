@@ -66,12 +66,6 @@ internal static class NativeSessionApi
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public static DtlsCallResultNative CopyPeerChain(SafeDtlsSessionHandle handle, Span<byte> buf)
-	{
-		return NativeMethods.SessionCopyPeerChain(handle, buf, (nuint)buf.Length);
-	}
-
-	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	public static DtlsCallResultNative Close(SafeDtlsSessionHandle handle, Span<byte> output)
 	{
 		return NativeMethods.SessionClose(handle, output, (nuint)output.Length);

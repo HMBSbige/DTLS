@@ -164,7 +164,7 @@ public sealed class DtlsSession : IDisposable
 
 		try
 		{
-			(X509Certificate2? peerCert, chain) = LoadPeerCertificates();
+			X509Certificate2? peerCert = LoadPeerCertificate();
 
 			if (_remoteCertificate is not null && peerCert is not null && peerCert.RawDataMemory.Span.SequenceEqual(_remoteCertificate.RawDataMemory.Span))
 			{
@@ -178,7 +178,7 @@ public sealed class DtlsSession : IDisposable
 			}
 			else
 			{
-				chain ??= new X509Chain();
+				chain = new X509Chain();
 				chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
 
 				chain.ChainPolicy.ApplicationPolicy.Add(_isServer ? ClientAuthOid : ServerAuthOid);
@@ -214,11 +214,6 @@ public sealed class DtlsSession : IDisposable
 			{
 				if (_validationCallback is null)
 				{
-					foreach (X509Certificate2 c in chain.ChainPolicy.ExtraStore)
-					{
-						c.Dispose();
-					}
-
 					foreach (X509ChainElement chainElement in chain.ChainElements)
 					{
 						chainElement.Certificate.Dispose();
@@ -287,12 +282,9 @@ public sealed class DtlsSession : IDisposable
 	}
 
 	/// <summary>
-	/// 从当前会话快照加载对端叶子证书与证书链。
-	/// 返回对象由调用方接管：叶子证书始终由调用方负责释放；链对象需释放。
-	/// 调用方必须逐个释放 <c>X509Chain.ChainPolicy.ExtraStore</c> 中的证书对象。
-	/// 若后续对该链执行 Build 并产生 <c>X509Chain.ChainElements</c>，其中证书对象也需逐个释放。
+	/// 从当前会话快照加载对端叶子证书，返回对象由调用方负责释放。
 	/// </summary>
-	private (X509Certificate2? PeerCert, X509Chain? Chain) LoadPeerCertificates()
+	private X509Certificate2? LoadPeerCertificate()
 	{
 		DtlsCallResultNative r = NativeSessionApi.Snapshot(_handle, out DtlsConnectionSnapshotNative snap);
 		NativeHelper.ThrowIfError(r.Code);
@@ -303,33 +295,14 @@ public sealed class DtlsSession : IDisposable
 		NativeHelper.ThrowIfError(certProbe.Code);
 		if (certProbe.BytesRead is 0)
 		{
-			return (null, null);
+			return null;
 		}
 
 		// Copy peer cert
 		byte[] certBuf = new byte[(int)certProbe.BytesRead];
 		DtlsCallResultNative certCopy = NativeSessionApi.CopyPeerCert(_handle, certBuf);
 		NativeHelper.ThrowIfError(certCopy.Code);
-		X509Certificate2 peerCert = X509CertificateLoader.LoadCertificate(certBuf.AsSpan(0, (int)certCopy.BytesRead));
-
-		X509Chain chain = new();
-		chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-
-		// Probe peer chain length
-		DtlsCallResultNative chainProbe = NativeSessionApi.CopyPeerChain(_handle, Span<byte>.Empty);
-		NativeHelper.ThrowIfError(chainProbe.Code);
-		if (chainProbe.BytesRead > 0)
-		{
-			byte[] chainBuf = new byte[(int)chainProbe.BytesRead];
-			DtlsCallResultNative chainCopy = NativeSessionApi.CopyPeerChain(_handle, chainBuf);
-			NativeHelper.ThrowIfError(chainCopy.Code);
-			foreach (ReadOnlySpan<byte> der in new FramedPacketEnumerator(chainBuf.AsSpan(0, (int)chainCopy.BytesRead)))
-			{
-				chain.ChainPolicy.ExtraStore.Add(X509CertificateLoader.LoadCertificate(der));
-			}
-		}
-
-		return (peerCert, chain);
+		return X509CertificateLoader.LoadCertificate(certBuf.AsSpan(0, (int)certCopy.BytesRead));
 	}
 
 	private DtlsOpResult Complete(in DtlsCallResultNative r)

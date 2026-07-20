@@ -1,8 +1,10 @@
 using DTLS.Dtls;
 using System.Diagnostics;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 
 namespace DTLS.Tests;
@@ -15,6 +17,7 @@ public class OpenSslInteropTests : InteropTestBase
 	}
 
 	private static readonly bool IsOpensslAvailable = CheckOpenSsl();
+	private static readonly bool SupportsCertificateChain = IsOpensslAvailable && CheckOpenSslCertificateChainSupport();
 
 	private static bool CheckOpenSsl()
 	{
@@ -30,6 +33,52 @@ public class OpenSslInteropTests : InteropTestBase
 		{
 			return false;
 		}
+	}
+
+	private static bool CheckOpenSslCertificateChainSupport()
+	{
+		try
+		{
+			using Process? p = Process.Start
+			(
+				new ProcessStartInfo("openssl", "s_server -help")
+				{
+					CreateNoWindow = true,
+					RedirectStandardOutput = true,
+					RedirectStandardError = true
+				}
+			);
+			if (p is null)
+			{
+				return false;
+			}
+
+			Task<string> standardOutput = p.StandardOutput.ReadToEndAsync();
+			Task<string> standardError = p.StandardError.ReadToEndAsync();
+			if (!p.WaitForExit(TimeSpan.FromSeconds(1)))
+			{
+				p.Kill(true);
+				p.WaitForExit();
+				return false;
+			}
+
+			string help = standardOutput.GetAwaiter().GetResult() + standardError.GetAwaiter().GetResult();
+			return p.ExitCode is 0 && help.Contains("-cert_chain", StringComparison.Ordinal);
+		}
+		catch
+		{
+			return false;
+		}
+	}
+
+	private static async Task StopProcessAsync(Process process)
+	{
+		if (!process.HasExited)
+		{
+			process.Kill(true);
+		}
+
+		await process.WaitForExitAsync();
 	}
 
 	[Test]
@@ -101,7 +150,99 @@ public class OpenSslInteropTests : InteropTestBase
 			}
 			finally
 			{
-				server.Kill(true);
+				await StopProcessAsync(server);
+			}
+		}
+		finally
+		{
+			Directory.Delete(tmpDir, true);
+		}
+	}
+
+	[Test]
+	public async Task Client_ReceivesLeafOnly_WhenOpenSslServerSendsChain(CancellationToken cancellationToken)
+	{
+		Skip.Unless(SupportsCertificateChain, "openssl s_server does not support -cert_chain");
+
+		(X509Certificate2 root, X509Certificate2 intermediate, X509Certificate2 leaf) = TestCertificateFactory.CreateEcdsaCertificateChain();
+		string tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+		Directory.CreateDirectory(tmpDir);
+
+		try
+		{
+			using (root)
+			using (intermediate)
+			using (leaf)
+			{
+				(string certPath, string keyPath) = ExportPem(leaf, tmpDir);
+				string chainPath = Path.Combine(tmpDir, "chain.pem");
+				await File.WriteAllTextAsync(chainPath, intermediate.ExportCertificatePem(), cancellationToken);
+				int port = GetFreeUdpPort();
+
+				bool receivedLeaf = false;
+				int peerIntermediateCount = -1;
+				SslPolicyErrors receivedErrors = SslPolicyErrors.None;
+
+				using Process? server = Process.Start
+				(
+					new ProcessStartInfo
+					(
+						"openssl",
+						$"s_server -4 -dtls1_2 -accept {port} " +
+						$"-cert \"{certPath}\" -key \"{keyPath}\" -cert_chain \"{chainPath}\" -quiet"
+					)
+					{
+						RedirectStandardInput = true,
+						RedirectStandardOutput = true,
+						CreateNoWindow = true
+					}
+				);
+				Assert.NotNull(server);
+
+				try
+				{
+					await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);// Give server time to start
+
+					using UdpClient udp = new();
+					UdpDatagramTransport transport = new(udp, new IPEndPoint(IPAddress.Loopback, port));
+
+					await using DtlsTransport client = await DtlsTransport.CreateClientAsync
+					(
+						transport,
+						new DtlsClientOptions
+						{
+							ServerName = "localhost",
+							RemoteCertificateValidation = (cert, chain, errors) =>
+							{
+								if (cert is null || chain is null)
+								{
+									return false;
+								}
+
+								receivedLeaf = cert.RawDataMemory.Span.SequenceEqual(leaf.RawDataMemory.Span);
+								peerIntermediateCount = chain.ChainPolicy.ExtraStore.Count;
+								receivedErrors = errors;
+								TestCertificateFactory.DisposeChainElements(chain);
+								return TestCertificateFactory.BuildChainWithExplicitIntermediate(root, intermediate, cert);
+							}
+						}
+					);
+
+					await server.StandardInput.WriteAsync("x");// Trigger server handshake
+
+					using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+					cts.CancelAfter(TimeSpan.FromSeconds(3));
+
+					await client.HandshakeAsync(cts.Token);
+
+					await Assert.That(receivedLeaf).IsTrue();
+					await Assert.That(peerIntermediateCount).IsEqualTo(0);
+					await Assert.That(receivedErrors).HasFlag(SslPolicyErrors.RemoteCertificateChainErrors);
+				}
+				finally
+				{
+					await StopProcessAsync(server);
+				}
 			}
 		}
 		finally
@@ -161,7 +302,7 @@ public class OpenSslInteropTests : InteropTestBase
 		}
 		finally
 		{
-			opensslClient.Kill(true);
+			await StopProcessAsync(opensslClient);
 		}
 	}
 }

@@ -14,9 +14,10 @@ public sealed record DtlsClientOptions
 	/// 可选的远程证书验证回调函数。
 	/// </summary>
 	/// <remarks>
-	/// 回调参数仅用于当前调用内的即时判断，不应缓存或跨调用保存其对象引用。
-	/// 如需在回调外使用叶子证书，必须通过 <see cref="DtlsSession.RemoteCertificate"/> 重新获取证书实例，并由调用方负责 dispose。
-	/// <c>X509Chain</c> 对象会自动释放；启用回调时，调用方必须逐个释放 <c>X509Chain.ChainElements</c> 和 <c>ChainPolicy.ExtraStore</c> 中的证书对象（建议在回调返回前完成）。
+	/// 回调参数仅在调用期间有效，不应缓存。
+	/// 如需在回调外使用远程证书，请通过 <see cref="DtlsSession.RemoteCertificate"/> 获取，并由调用方负责释放。
+	/// 回调仅提供对端叶子证书；验证所需的中间证书须由调用方自行提供。
+	/// <c>X509Chain</c> 由本库释放；调用方必须在回调返回前逐个释放其 <c>ChainElements</c> 中的证书。
 	/// </remarks>
 	public Func<X509Certificate2?, X509Chain?, SslPolicyErrors, bool>? RemoteCertificateValidation { get; init; }
 

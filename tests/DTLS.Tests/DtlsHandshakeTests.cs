@@ -43,6 +43,48 @@ public class DtlsHandshakeTests : DtlsTestBase
 	}
 
 	[Test]
+	public async Task Handshake_ClientValidationCallback_BuildsWithExplicitIntermediate(CancellationToken cancellationToken)
+	{
+		(X509Certificate2 root, X509Certificate2 intermediate, X509Certificate2 leaf) = TestCertificateFactory.CreateEcdsaCertificateChain();
+		using (root)
+		using (intermediate)
+		using (leaf)
+		{
+			(IDatagramTransport clientTransport, IDatagramTransport serverTransport) = CreateTransportPair();
+
+			await using DtlsTransport client = await DtlsTransport.CreateClientAsync
+			(
+				clientTransport,
+				new DtlsClientOptions
+				{
+					ServerName = "localhost",
+					RemoteCertificateValidation = (cert, chain, _) =>
+					{
+						if (cert is null || chain is null)
+						{
+							return false;
+						}
+
+						TestCertificateFactory.DisposeChainElements(chain);
+						return TestCertificateFactory.BuildChainWithExplicitIntermediate(root, intermediate, cert);
+					}
+				}
+			);
+			await using DtlsTransport server = await DtlsTransport.CreateServerAsync
+			(
+				serverTransport,
+				new DtlsServerOptions { Certificate = leaf }
+			);
+
+			await Task.WhenAll
+			(
+				client.HandshakeAsync(cancellationToken).AsTask(),
+				server.HandshakeAsync(cancellationToken).AsTask()
+			);
+		}
+	}
+
+	[Test]
 	public async Task Handshake_ClientWithoutCert_ServerReceivesDefaultCert(CancellationToken cancellationToken)
 	{
 		(IDatagramTransport clientTransport, IDatagramTransport serverTransport) = CreateTransportPair();
