@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
+use crate::error::DtlsResult;
+
 pub(crate) struct DtlsSession {
     pub(crate) dtls: dimpl::Dtls,
     pub(crate) handshake_complete: bool,
@@ -13,4 +15,5 @@ pub(crate) struct DtlsSession {
     pub(crate) next_timeout: Option<Instant>,
     pub(crate) poll_buf: Vec<u8>,
     pub(crate) protocol_version: u16,
+    pub(crate) fatal_error: Option<(DtlsResult, String)>,
 }

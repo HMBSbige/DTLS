@@ -6,10 +6,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
-// ── 常量 ─────────────────────────────────────────────────
-
-/// 单次调用输入数据的最大允许长度（1 MiB）。
-/// 用于限制 `dtls_session_feed`/`dtls_session_send` 的入参，避免恶意超大长度触发过量分配。
+// 限制单次 FFI 输入，避免按不可信长度过量分配。
 const MAX_BUFFER_SIZE: usize = 1024 * 1024;
 
 /// .NET `SslProtocols.Tls12` 的整数值。
@@ -17,9 +14,6 @@ const SSL_PROTOCOLS_TLS12: u32 = 0x0C00;
 /// .NET `SslProtocols.Tls13` 的整数值。
 const SSL_PROTOCOLS_TLS13: u32 = 0x3000;
 
-// ── C ABI 结构体 ─────────────────────────────────────────
-
-/// 在返回 `DtlsCallResult` 的 FFI 调用中填充的状态字段。
 #[repr(C)]
 pub(crate) struct DtlsOpStatus {
     pub(crate) timeout_ms: i64,
@@ -28,13 +22,11 @@ pub(crate) struct DtlsOpStatus {
     pub(crate) is_peer_closed: u8,
 }
 
-/// 连接信息的单次快照。
 #[repr(C)]
 pub(crate) struct DtlsConnectionSnapshot {
     pub(crate) protocol: u16,
 }
 
-/// 返回 `DtlsCallResult` 的 FFI 导出函数统一使用的结果结构。
 #[repr(C)]
 pub(crate) struct DtlsCallResult {
     pub(crate) code: DtlsResult,
@@ -80,10 +72,6 @@ fn catch_unwind_call_result(f: impl FnOnce() -> DtlsCallResult) -> DtlsCallResul
     })
 }
 
-// ── 内部辅助函数 ─────────────────────────────────────────
-
-/// 将“原始指针 + 长度”安全地转换为可变切片。
-///
 /// # Safety
 ///
 /// 当 `len > 0` 时，`ptr` 必须在 `len` 字节范围内可读写且满足对齐要求。
@@ -91,8 +79,6 @@ unsafe fn raw_mut_slice<'a>(ptr: *mut u8, len: usize) -> &'a mut [u8] {
     if len == 0 { &mut [] } else { unsafe { std::slice::from_raw_parts_mut(ptr, len) } }
 }
 
-/// 将“原始指针 + 长度”安全地转换为只读切片。
-///
 /// # Safety
 ///
 /// 当 `len > 0` 时，`ptr` 必须在 `len` 字节范围内可读且满足对齐要求。
@@ -131,19 +117,29 @@ fn protocol_version_to_ssl_protocols(ver: dimpl::ProtocolVersion) -> u16 {
     }
 }
 
-fn map_dimpl_error(e: &dimpl::Error) -> DtlsResult {
-    match e {
+// dimpl 0.7.x 的 HandshakePending 可重试；其他公开错误均为连接级 fatal。
+fn record_dimpl_error(s: &mut DtlsSession, e: &dimpl::Error) -> DtlsCallResult {
+    let code = match e {
         dimpl::Error::CertificateError(_) => DtlsResult::CertificateError,
         _ => DtlsResult::DtlsError,
+    };
+    let message = e.to_string();
+    if !matches!(e, dimpl::Error::HandshakePending) {
+        s.fatal_error = Some((code, message.clone()));
     }
+    set_last_error(message);
+    DtlsCallResult::err_with(code, make_status(s))
 }
 
-fn drain_output(s: &mut DtlsSession) -> Result<(), dimpl::Error> {
-    s.dtls.handle_timeout(Instant::now())?;
+fn drain_output(s: &mut DtlsSession) -> Result<(), DtlsCallResult> {
+    if let Err(e) = s.dtls.handle_timeout(Instant::now()) {
+        return Err(record_dimpl_error(s, &e));
+    }
     s.next_timeout = None;
     loop {
         match s.dtls.poll_output(&mut s.poll_buf) {
             dimpl::Output::Packet(data) => s.outgoing_pkts.push_back(data.to_vec()),
+            dimpl::Output::BufferTooSmall { needed } => s.poll_buf.resize(needed, 0),
             dimpl::Output::Connected => {
                 s.handshake_complete = true;
                 if s.protocol_version == 0
@@ -157,7 +153,9 @@ fn drain_output(s: &mut DtlsSession) -> Result<(), dimpl::Error> {
                 let der = der.to_vec();
                 if !s.peer_certs.is_empty() {
                     if der.len() > 0xFF_FFFF {
-                        return Err(dimpl::Error::CertificateError("peer certificate exceeds 16 MiB".into()));
+                        // 本层链帧封装的限制而非 dimpl 连接级错误，刻意不锁存 fatal_error。
+                        set_last_error("peer certificate exceeds 16 MiB");
+                        return Err(DtlsCallResult::err_with(DtlsResult::CertificateError, make_status(s)));
                     }
                     s.peer_chain_framed.extend_from_slice(&(der.len() as u32).to_le_bytes());
                     s.peer_chain_framed.extend_from_slice(&der);
@@ -171,40 +169,56 @@ fn drain_output(s: &mut DtlsSession) -> Result<(), dimpl::Error> {
             dimpl::Output::KeyingMaterial(..) => {}
             dimpl::Output::CloseNotify => {
                 s.peer_closed = true;
-                // DTLS 1.2 下 dimpl 收到对端 close_notify 会自动排队 reciprocal 并关闭本地写方向；
-                // DTLS 1.3 支持半关，dimpl 仍允许应用层继续发送，直到调用 close() 才排队本端 close_notify。
-                // 因此 local_closed 只在 1.2 或版本未决（会话实际已终止）时同步置位。
-                if !matches!(s.dtls.protocol_version(), Some(dimpl::ProtocolVersion::DTLS1_3)) {
-                    s.local_closed = true;
-                }
             }
             _ => {}
         }
     }
+    // 仅在排空至 Timeout 后，dimpl 的关闭状态才一致。
+    s.local_closed |= s.dtls.is_closed();
     Ok(())
 }
 
 fn make_status(s: &DtlsSession) -> DtlsOpStatus {
-    let now = Instant::now();
-    // 本端已关闭时会话已终止：既不再握手，也没有重传超时需要暴露给调用方。
-    let is_closed = s.local_closed;
+    let is_terminal = s.local_closed || s.fatal_error.is_some();
     DtlsOpStatus {
-        timeout_ms: if is_closed {
+        timeout_ms: if is_terminal {
             -1
         } else {
-            s.next_timeout.map_or(-1, |t| t.saturating_duration_since(now).as_millis() as i64)
+            s.next_timeout.map_or(-1, |t| t.saturating_duration_since(Instant::now()).as_millis() as i64)
         },
-        is_handshaking: u8::from(!s.handshake_complete && !is_closed),
+        is_handshaking: u8::from(!s.handshake_complete && !is_terminal),
         is_local_closed: u8::from(s.local_closed),
         is_peer_closed: u8::from(s.peer_closed),
     }
 }
 
+fn fatal_error_result(s: &DtlsSession) -> Option<DtlsCallResult> {
+    let (code, message) = s.fatal_error.as_ref()?;
+    set_last_error(message.clone());
+    Some(DtlsCallResult::err_with(*code, make_status(s)))
+}
+
+/// 所有驱动 `Dtls` 状态机的入口必须使用此守卫。
+///
+/// # Safety
+///
+/// `session` 须为空或指向有效的 `DtlsSession`，且在本次调用期间保持有效、无其他别名；
+/// `out_pkts`/`out_pkts_cap` 须满足 `raw_mut_slice` 的要求。
+unsafe fn with_open_session(session: *mut DtlsSession, out_pkts: *mut u8, out_pkts_cap: usize, f: impl FnOnce(&mut DtlsSession) -> DtlsCallResult) -> DtlsCallResult {
+    if session.is_null() || (out_pkts_cap > 0 && out_pkts.is_null()) {
+        set_last_error("null pointer");
+        return DtlsCallResult::err(DtlsResult::InvalidInput);
+    }
+    let s = unsafe { &mut *session };
+    match fatal_error_result(s) {
+        Some(result) => result,
+        None => f(s),
+    }
+}
+
 fn flush(s: &mut DtlsSession, out_pkts: &mut [u8]) -> DtlsCallResult {
-    if let Err(e) = drain_output(s) {
-        let code = map_dimpl_error(&e);
-        set_last_error(e.to_string());
-        return DtlsCallResult::err_with(code, make_status(s));
+    if let Err(r) = drain_output(s) {
+        return r;
     }
     match write_outgoing_to_buffer(s, out_pkts) {
         Ok(n) => DtlsCallResult {
@@ -219,8 +233,6 @@ fn flush(s: &mut DtlsSession, out_pkts: &mut [u8]) -> DtlsCallResult {
         }
     }
 }
-
-// ── FFI 导出函数 ─────────────────────────────────────────
 
 #[repr(C)]
 pub(crate) struct DtlsSessionNewConfig {
@@ -279,6 +291,7 @@ fn create_session(cert_der: &[u8], key_der: &[u8], is_client: bool, version: u32
         next_timeout: None,
         poll_buf: vec![0u8; 65536],
         protocol_version: version as u16,
+        fatal_error: None,
     })
 }
 
@@ -323,83 +336,72 @@ pub unsafe extern "C" fn dtls_session_new(config: *const DtlsSessionNewConfig, o
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dtls_session_feed(session: *mut DtlsSession, input: *const u8, input_len: usize, out_pkts: *mut u8, out_pkts_cap: usize) -> DtlsCallResult {
     catch_unwind_call_result(|| {
-        if session.is_null() || (out_pkts_cap > 0 && out_pkts.is_null()) {
-            set_last_error("null pointer");
-            return DtlsCallResult::err(DtlsResult::InvalidInput);
-        }
-        let s = unsafe { &mut *session };
-        // 先从原始指针复制输入，避免调用方传入输入/输出重叠缓冲区时产生别名 UB。
-        let input_copy = if input_len > 0 {
-            if input.is_null() {
-                set_last_error("null input pointer with non-zero length");
-                return DtlsCallResult::err_with(DtlsResult::InvalidInput, make_status(s));
+        let body = |s: &mut DtlsSession| {
+            // 先从原始指针复制输入，避免调用方传入输入/输出重叠缓冲区时产生别名 UB。
+            let input_copy = if input_len > 0 {
+                if input.is_null() {
+                    set_last_error("null input pointer with non-zero length");
+                    return DtlsCallResult::err_with(DtlsResult::InvalidInput, make_status(s));
+                }
+                if input_len > MAX_BUFFER_SIZE {
+                    set_last_error(format!("input_len {} exceeds maximum {}", input_len, MAX_BUFFER_SIZE));
+                    return DtlsCallResult::err_with(DtlsResult::InvalidInput, make_status(s));
+                }
+                let mut v = vec![0u8; input_len];
+                unsafe { std::ptr::copy_nonoverlapping(input, v.as_mut_ptr(), input_len) };
+                Some(v)
+            } else {
+                None
+            };
+            let out_buf = unsafe { raw_mut_slice(out_pkts, out_pkts_cap) };
+            if let Some(ref data) = input_copy
+                && let Err(e) = s.dtls.handle_packet(data)
+            {
+                return record_dimpl_error(s, &e);
             }
-            if input_len > MAX_BUFFER_SIZE {
-                set_last_error(format!("input_len {} exceeds maximum {}", input_len, MAX_BUFFER_SIZE));
-                return DtlsCallResult::err_with(DtlsResult::InvalidInput, make_status(s));
-            }
-            let mut v = vec![0u8; input_len];
-            unsafe { std::ptr::copy_nonoverlapping(input, v.as_mut_ptr(), input_len) };
-            Some(v)
-        } else {
-            None
+            flush(s, out_buf)
         };
-        let out_buf = unsafe { raw_mut_slice(out_pkts, out_pkts_cap) };
-        if let Some(ref data) = input_copy
-            && let Err(e) = s.dtls.handle_packet(data)
-        {
-            let code = map_dimpl_error(&e);
-            set_last_error(e.to_string());
-            return DtlsCallResult::err_with(code, make_status(s));
-        }
-        flush(s, out_buf)
+        unsafe { with_open_session(session, out_pkts, out_pkts_cap, body) }
     })
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dtls_session_handle_timeout(session: *mut DtlsSession, out_pkts: *mut u8, out_pkts_cap: usize) -> DtlsCallResult {
     catch_unwind_call_result(|| {
-        if session.is_null() || (out_pkts_cap > 0 && out_pkts.is_null()) {
-            set_last_error("null pointer");
-            return DtlsCallResult::err(DtlsResult::InvalidInput);
-        }
-        flush(unsafe { &mut *session }, unsafe { raw_mut_slice(out_pkts, out_pkts_cap) })
+        let body = |s: &mut DtlsSession| flush(s, unsafe { raw_mut_slice(out_pkts, out_pkts_cap) });
+        unsafe { with_open_session(session, out_pkts, out_pkts_cap, body) }
     })
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dtls_session_send(session: *mut DtlsSession, data: *const u8, data_len: usize, out_pkts: *mut u8, out_pkts_cap: usize) -> DtlsCallResult {
     catch_unwind_call_result(|| {
-        if session.is_null() || (out_pkts_cap > 0 && out_pkts.is_null()) {
-            set_last_error("null pointer");
-            return DtlsCallResult::err(DtlsResult::InvalidInput);
-        }
-        let s = unsafe { &mut *session };
-        // 先从原始指针复制输入，避免调用方传入数据/输出重叠缓冲区时产生别名 UB。
-        let data_copy = if data_len > 0 {
-            if data.is_null() {
-                set_last_error("null data pointer with non-zero length");
-                return DtlsCallResult::err_with(DtlsResult::InvalidInput, make_status(s));
+        let body = |s: &mut DtlsSession| {
+            // 先从原始指针复制输入，避免调用方传入数据/输出重叠缓冲区时产生别名 UB。
+            let data_copy = if data_len > 0 {
+                if data.is_null() {
+                    set_last_error("null data pointer with non-zero length");
+                    return DtlsCallResult::err_with(DtlsResult::InvalidInput, make_status(s));
+                }
+                if data_len > MAX_BUFFER_SIZE {
+                    set_last_error(format!("data_len {} exceeds maximum {}", data_len, MAX_BUFFER_SIZE));
+                    return DtlsCallResult::err_with(DtlsResult::InvalidInput, make_status(s));
+                }
+                let mut v = vec![0u8; data_len];
+                unsafe { std::ptr::copy_nonoverlapping(data, v.as_mut_ptr(), data_len) };
+                Some(v)
+            } else {
+                None
+            };
+            let out_buf = unsafe { raw_mut_slice(out_pkts, out_pkts_cap) };
+            if let Some(ref payload) = data_copy
+                && let Err(e) = s.dtls.send_application_data(payload)
+            {
+                return record_dimpl_error(s, &e);
             }
-            if data_len > MAX_BUFFER_SIZE {
-                set_last_error(format!("data_len {} exceeds maximum {}", data_len, MAX_BUFFER_SIZE));
-                return DtlsCallResult::err_with(DtlsResult::InvalidInput, make_status(s));
-            }
-            let mut v = vec![0u8; data_len];
-            unsafe { std::ptr::copy_nonoverlapping(data, v.as_mut_ptr(), data_len) };
-            Some(v)
-        } else {
-            None
+            flush(s, out_buf)
         };
-        let out_buf = unsafe { raw_mut_slice(out_pkts, out_pkts_cap) };
-        if let Some(ref payload) = data_copy
-            && let Err(e) = s.dtls.send_application_data(payload)
-        {
-            let code = map_dimpl_error(&e);
-            set_last_error(e.to_string());
-            return DtlsCallResult::err_with(code, make_status(s));
-        }
-        flush(s, out_buf)
+        unsafe { with_open_session(session, out_pkts, out_pkts_cap, body) }
     })
 }
 
@@ -460,8 +462,7 @@ pub unsafe extern "C" fn dtls_session_connection_snapshot(session: *const DtlsSe
     })
 }
 
-/// 将对端首个证书（DER）复制到调用方缓冲区（当前实现中即 `peer_certs[0]`）。
-/// 当 `buf` 为空或 `buf_len` 为 0 时，不拷贝数据，仅通过 `bytes_read` 返回所需长度。
+/// 查询或复制对端叶证书（DER）；空指针或零长度缓冲区仅返回所需长度。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dtls_session_copy_peer_cert(session: *const DtlsSession, buf: *mut u8, buf_len: usize) -> DtlsCallResult {
     catch_unwind_call_result(|| {
@@ -508,9 +509,8 @@ pub unsafe extern "C" fn dtls_session_copy_peer_cert(session: *const DtlsSession
     })
 }
 
-/// 将对端其余证书复制到调用方缓冲区（当前实现中即 `peer_certs[1..]`）。
-/// 链数据格式为重复的 `[u32 小端长度][DER 字节]`。
-/// 当 `buf` 为空或 `buf_len` 为 0 时，不拷贝数据，仅通过 `bytes_read` 返回所需长度。
+/// 查询或复制对端其余证书，编码为重复的 `[u32 小端长度][DER 字节]`。
+/// 空指针或零长度缓冲区仅返回所需长度。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dtls_session_copy_peer_chain(session: *const DtlsSession, buf: *mut u8, buf_len: usize) -> DtlsCallResult {
     catch_unwind_call_result(|| {
@@ -558,37 +558,29 @@ pub unsafe extern "C" fn dtls_session_copy_peer_chain(session: *const DtlsSessio
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dtls_session_close(session: *mut DtlsSession, out_pkts: *mut u8, out_pkts_cap: usize) -> DtlsCallResult {
     catch_unwind_call_result(|| {
-        if session.is_null() || (out_pkts_cap > 0 && out_pkts.is_null()) {
-            set_last_error("null pointer");
-            return DtlsCallResult::err(DtlsResult::InvalidInput);
-        }
-        let s = unsafe { &mut *session };
-        let out_buf = unsafe { raw_mut_slice(out_pkts, out_pkts_cap) };
-        if !s.local_closed {
-            match s.dtls.close() {
-                Ok(()) => {
-                    s.local_closed = true;
-                }
-                Err(dimpl::Error::HandshakePending) => {
-                    // 会话尚未解析版本；dimpl 要求此路径下直接 drop 而非 close。
-                    // 不得 flush：drain_output 会把等待重传的握手 flight 拉出来，让调用方
-                    // 把它误当作 close_notify 发送。直接返回零字节，保留现有会话状态，
-                    // 调用方握手完成后可再次尝试 CloseAsync。
-                    return DtlsCallResult {
-                        code: DtlsResult::Ok,
-                        bytes_written: 0,
-                        bytes_read: 0,
-                        status: make_status(s),
-                    };
-                }
-                Err(e) => {
-                    let code = map_dimpl_error(&e);
-                    set_last_error(e.to_string());
-                    return DtlsCallResult::err_with(code, make_status(s));
+        let body = |s: &mut DtlsSession| {
+            let out_buf = unsafe { raw_mut_slice(out_pkts, out_pkts_cap) };
+            if !s.local_closed {
+                match s.dtls.close() {
+                    Ok(()) => {
+                        s.local_closed = true;
+                    }
+                    Err(dimpl::Error::HandshakePending) => {
+                        // 版本未决时不得 flush，否则待重传的握手 flight 会被误作 close_notify。
+                        // 保留状态，握手完成后可重试 CloseAsync。
+                        return DtlsCallResult {
+                            code: DtlsResult::Ok,
+                            bytes_written: 0,
+                            bytes_read: 0,
+                            status: make_status(s),
+                        };
+                    }
+                    Err(e) => return record_dimpl_error(s, &e),
                 }
             }
-        }
-        flush(s, out_buf)
+            flush(s, out_buf)
+        };
+        unsafe { with_open_session(session, out_pkts, out_pkts_cap, body) }
     })
 }
 

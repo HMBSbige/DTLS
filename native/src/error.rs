@@ -3,7 +3,6 @@
 use std::cell::RefCell;
 use std::ffi::c_char;
 
-/// `DtlsCallResult.code` 使用的结果码。
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DtlsResult {
@@ -20,14 +19,12 @@ thread_local! {
     static LAST_ERROR: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
-/// 为当前线程保存最近一次错误消息。
 pub(crate) fn set_last_error(msg: impl Into<String>) {
     LAST_ERROR.with_borrow_mut(|e| *e = msg.into());
 }
 
-/// 将最近一次错误消息拷贝到调用方提供的缓冲区。
-///
-/// 返回实际写入字节数（不含末尾 NUL，长度不足时会截断）；失败时返回 -1。
+/// 将线程最近错误复制到缓冲区并以 NUL 结尾。
+/// 返回不含 NUL 的写入字节数，允许截断；缓冲区无效时返回 -1。
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dtls_last_error_message(buf: *mut c_char, buf_len: i32) -> i32 {
     if buf.is_null() || buf_len <= 0 {
