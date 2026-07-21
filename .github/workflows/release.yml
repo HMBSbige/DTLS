@@ -37,7 +37,7 @@ jobs:
         with:
           user: ${{ secrets.NUGET_USER }}
       - name: Push to NuGet
-        working-directory: src/DTLS/bin/Release
+        working-directory: artifacts/package/release
         run: |
           dotnet nuget push *.nupkg -s https://api.nuget.org/v3/index.json -k ${{ steps.nuget-login.outputs.NUGET_API_KEY }} --skip-duplicate
           dotnet nuget push *.nupkg -s https://nuget.pkg.github.com/HMBSbige -k ${{ secrets.GITHUB_TOKEN }} --skip-duplicate
@@ -48,6 +48,6 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           allowUpdates: true
           artifactErrorsFailBuild: true
-          artifacts: src/DTLS/bin/Release/*.nupkg
+          artifacts: artifacts/package/release/*.nupkg
           immutableCreate: true
           updateOnlyUnreleased: true
