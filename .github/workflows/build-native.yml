@@ -24,15 +24,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "native -> target"
-          key: ${{ matrix.target }}
       - name: Install Rust
         run: |
           rustup set profile minimal
           rustup toolchain install stable
           rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "native -> target"
+          key: ${{ matrix.target }}
       - name: Install cross
         if: matrix.use-cross
         run: cargo install cross --git https://github.com/cross-rs/cross

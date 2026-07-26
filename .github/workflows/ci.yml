@@ -16,13 +16,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "native -> target"
       - name: Install Rust
         run: |
           rustup set profile minimal
           rustup toolchain install stable --component clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "native -> target"
       - run: cargo fmt --check
         working-directory: native
       - run: cargo clippy --all-targets -- -D warnings
@@ -54,11 +54,11 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.NET_VERSION }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "native -> target"
       - name: Install Rust
         run: |
           rustup set profile minimal
           rustup toolchain install stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "native -> target"
       - run: dotnet test -c Release
