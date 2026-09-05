@@ -37,8 +37,8 @@ jobs:
           dotnet-version: ${{ env.NET_VERSION }}
       - run: dotnet format -v diag --verify-no-changes
 
-  build-native:
-    uses: ./.github/workflows/build-native.yml
+  package:
+    uses: ./.github/workflows/package.yml
 
   dotnet-test:
     strategy:

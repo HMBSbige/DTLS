@@ -1,7 +1,6 @@
 using DTLS.Common;
 using DTLS.Dtls;
 using System.Security.Cryptography.X509Certificates;
-using System.Threading.Channels;
 
 namespace DTLS.Tests;
 
@@ -43,12 +42,7 @@ public abstract class DtlsTestBase : IDisposable
 
 	protected static (IDatagramTransport client, IDatagramTransport server) CreateTransportPair()
 	{
-		Channel<byte[]> c2s = Channel.CreateUnbounded<byte[]>();
-		Channel<byte[]> s2c = Channel.CreateUnbounded<byte[]>();
-		return (
-			new ChannelDatagramTransport(s2c.Reader, c2s.Writer),
-			new ChannelDatagramTransport(c2s.Reader, s2c.Writer)
-		);
+		return ChannelDatagramTransport.CreatePair();
 	}
 
 	/// <summary>

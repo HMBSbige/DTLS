@@ -1,7 +1,6 @@
 using DTLS.Common;
 using System.Net;
 using System.Net.Sockets;
-using System.Threading.Channels;
 
 namespace DTLS.Tests;
 
@@ -16,21 +15,6 @@ internal sealed class BlackHoleTransport : IDatagramTransport
 	public ValueTask SendAsync(ReadOnlyMemory<byte> datagram, CancellationToken cancellationToken = default)
 	{
 		return ValueTask.CompletedTask;
-	}
-}
-
-internal sealed class ChannelDatagramTransport(ChannelReader<byte[]> reader, ChannelWriter<byte[]> writer) : IDatagramTransport
-{
-	public async ValueTask<int> ReceiveAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
-	{
-		byte[] data = await reader.ReadAsync(cancellationToken);
-		data.CopyTo(buffer);
-		return data.Length;
-	}
-
-	public async ValueTask SendAsync(ReadOnlyMemory<byte> datagram, CancellationToken cancellationToken = default)
-	{
-		await writer.WriteAsync(datagram.ToArray(), cancellationToken);
 	}
 }
 

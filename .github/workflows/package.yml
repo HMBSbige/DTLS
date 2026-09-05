@@ -1,0 +1,115 @@
+name: Package
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Package version, optionally prefixed with v
+        type: string
+        default: 0.0.0-local
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: 1
+  DOTNET_GENERATE_ASPNET_CERTIFICATE: false
+  NET_VERSION: 10.0.x
+
+jobs:
+  build-native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: linux-x64,              os: ubuntu-latest,  cargo_command: cargo }
+          - { rid: linux-arm64,            os: ubuntu-latest,  cargo_command: cross }
+          - { rid: linux-loongarch64,      os: ubuntu-latest,  cargo_command: cross }
+          - { rid: linux-riscv64,          os: ubuntu-latest,  cargo_command: cross }
+          - { rid: linux-musl-x64,         os: ubuntu-latest,  cargo_command: cross }
+          - { rid: linux-musl-arm64,       os: ubuntu-latest,  cargo_command: cross }
+          - { rid: linux-musl-loongarch64, os: ubuntu-latest,  cargo_command: cross }
+          - { rid: linux-musl-riscv64,     os: ubuntu-latest,  cargo_command: cross }
+          - { rid: linux-bionic-x64,       os: ubuntu-latest,  cargo_command: cross }
+          - { rid: linux-bionic-arm64,     os: ubuntu-latest,  cargo_command: cross }
+          - { rid: win-x64,                os: windows-latest, cargo_command: cargo }
+          - { rid: win-arm64,              os: windows-latest, cargo_command: cargo }
+          - { rid: osx-arm64,              os: macos-latest,   cargo_command: cargo }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        run: |
+          rustup set profile minimal
+          rustup toolchain install stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "native -> target"
+          key: ${{ matrix.rid }}
+      - name: Install cross
+        if: matrix.cargo_command == 'cross'
+        run: cargo install cross --git https://github.com/cross-rs/cross
+      - name: Build native assets
+        shell: pwsh
+        run: ./scripts/build-native.ps1 -RuntimeIdentifier ${{ matrix.rid }} -CargoCommand ${{ matrix.cargo_command }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-${{ matrix.rid }}
+          path: artifacts/native/
+          if-no-files-found: error
+
+  pack:
+    needs: build-native
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.pack.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: ${{ env.NET_VERSION }}
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: native-*
+          merge-multiple: true
+          path: artifacts/native
+      - name: Pack
+        id: pack
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          $version = $env:PACKAGE_VERSION -replace '^v', ''
+          dotnet pack src/DTLS/DTLS.csproj -p:Version=$version --output artifacts/package
+          if ($LASTEXITCODE -ne 0) { throw "Pack failed with exit code $LASTEXITCODE." }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dtls-package
+          path: artifacts/package/*.nupkg
+          if-no-files-found: error
+
+  native-aot-test:
+    needs: pack
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: win-x64,          os: windows-latest }
+          - { rid: win-arm64,        os: windows-11-arm }
+          - { rid: linux-x64,        os: ubuntu-latest }
+          - { rid: linux-arm64,      os: ubuntu-26.04-arm }
+          - { rid: linux-musl-x64,   os: ubuntu-latest }
+          - { rid: linux-musl-arm64, os: ubuntu-26.04-arm }
+          - { rid: osx-arm64,        os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        if: ${{ !startsWith(matrix.rid, 'linux-musl-') }}
+        with:
+          dotnet-version: ${{ env.NET_VERSION }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: dtls-package
+          path: artifacts/package
+      - name: Publish and run NativeAOT smoke test
+        shell: pwsh
+        run: ./scripts/test-native-aot.ps1 -RuntimeIdentifier ${{ matrix.rid }} -PackageVersion ${{ needs.pack.outputs.version }}

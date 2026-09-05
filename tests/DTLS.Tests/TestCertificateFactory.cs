@@ -5,18 +5,8 @@ using System.Security.Cryptography.X509Certificates;
 
 namespace DTLS.Tests;
 
-internal static class TestCertificateFactory
+internal static partial class TestCertificateFactory
 {
-	public static X509Certificate2 CreateEcdsaSelfSigned()
-	{
-		using ECDsa key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
-		CertificateRequest req = new("CN=localhost", key, HashAlgorithmName.SHA256);
-		SubjectAlternativeNameBuilder san = new();
-		san.AddDnsName("localhost");
-		req.CertificateExtensions.Add(san.Build());
-		return ExportAndReload(req);
-	}
-
 	/// <summary>Root 与 Intermediate 仅含公钥（信任锚用途）；Leaf 含可导出私钥，可用作服务端证书。</summary>
 	public static (X509Certificate2 Root, X509Certificate2 Intermediate, X509Certificate2 Leaf) CreateEcdsaCertificateChain()
 	{
@@ -184,18 +174,6 @@ internal static class TestCertificateFactory
 		request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
 		request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
 		return request;
-	}
-
-	private static X509Certificate2 ExportAndReload(CertificateRequest request)
-	{
-		DateTimeOffset now = DateTimeOffset.UtcNow;
-		using X509Certificate2 tmp = request.CreateSelfSigned(now.AddMinutes(-1), now.AddDays(1));
-		return X509CertificateLoader.LoadPkcs12
-		(
-			tmp.Export(X509ContentType.Pfx),
-			default,
-			X509KeyStorageFlags.Exportable
-		);
 	}
 
 	private static byte[] CreateSerialNumber()

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <ManagePackageVersionsCentrally Condition="'$(DTLSPackageVersion)' != ''">false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../DTLS.Tests/ChannelDatagramTransport.cs" Link="ChannelDatagramTransport.cs" />
+    <Compile Include="../DTLS.Tests/TestCertificateFactory.SelfSigned.cs" Link="TestCertificateFactory.SelfSigned.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(DTLSPackageVersion)' == ''">
+    <ProjectReference Include="../../src/DTLS/DTLS.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(DTLSPackageVersion)' != ''">
+    <PackageReference Include="DTLS" Version="$(DTLSPackageVersion)" />
+  </ItemGroup>
+
+</Project>

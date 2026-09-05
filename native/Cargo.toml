@@ -6,7 +6,7 @@ authors = ["HMBSbige"]
 repository = "https://github.com/HMBSbige/DTLS"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 dimpl = { version = "0.7" }

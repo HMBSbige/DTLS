@@ -1,0 +1,39 @@
+<Project>
+
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <_DTLSStaticLibraryFileName Condition="$(RuntimeIdentifier.StartsWith('win-'))">dtls_native.lib</_DTLSStaticLibraryFileName>
+    <_DTLSStaticLibraryFileName Condition="$(RuntimeIdentifier.StartsWith('linux-')) or $(RuntimeIdentifier.StartsWith('osx-'))">libdtls_native.a</_DTLSStaticLibraryFileName>
+    <_DTLSDynamicLibraryFileName Condition="$(RuntimeIdentifier.StartsWith('win-'))">dtls_native.dll</_DTLSDynamicLibraryFileName>
+    <_DTLSDynamicLibraryFileName Condition="$(RuntimeIdentifier.StartsWith('linux-'))">libdtls_native.so</_DTLSDynamicLibraryFileName>
+    <_DTLSDynamicLibraryFileName Condition="$(RuntimeIdentifier.StartsWith('osx-'))">libdtls_native.dylib</_DTLSDynamicLibraryFileName>
+
+    <_DTLSStaticRoot>$(MSBuildThisFileDirectory)..\runtimes\$(RuntimeIdentifier)\native-static</_DTLSStaticRoot>
+    <_DTLSStaticLibraryPath Condition="'$(_DTLSStaticLibraryFileName)' != ''">$(_DTLSStaticRoot)\$(_DTLSStaticLibraryFileName)</_DTLSStaticLibraryPath>
+    <_DTLSNativeStaticLinkerResponsePath>$(_DTLSStaticRoot)\dtls_native.link.rsp</_DTLSNativeStaticLinkerResponsePath>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(PublishAot)' == 'true' and Exists('$(_DTLSStaticLibraryPath)') and Exists('$(_DTLSNativeStaticLinkerResponsePath)')">
+    <DirectPInvoke Include="dtls_native" />
+    <NativeLibrary Include="$(_DTLSStaticLibraryPath)" />
+  </ItemGroup>
+
+  <Target Name="_DTLSValidateStaticNativeLibrary" BeforeTargets="_ComputeAssembliesToCompileToNative;IlcCompile" Condition="'$(PublishAot)' == 'true'">
+    <Error Condition="'$(_DTLSStaticLibraryFileName)' == ''" Text="DTLS does not contain static native assets for RuntimeIdentifier '$(RuntimeIdentifier)'." />
+    <Error Condition="!Exists('$(_DTLSStaticLibraryPath)')" Text="DTLS static native library was not found at '$(_DTLSStaticLibraryPath)'. Restore a complete DTLS package for RuntimeIdentifier '$(RuntimeIdentifier)'." />
+    <Error Condition="!Exists('$(_DTLSNativeStaticLinkerResponsePath)')" Text="DTLS native static linker response file was not found at '$(_DTLSNativeStaticLinkerResponsePath)'. Restore a complete DTLS package for RuntimeIdentifier '$(RuntimeIdentifier)'." />
+  </Target>
+
+  <!-- Append Rust's system dependencies immediately before the native link because archive order matters on Unix. -->
+  <Target Name="_DTLSAddNativeStaticLinkerArguments" BeforeTargets="LinkNative" Condition="'$(PublishAot)' == 'true' and Exists('$(_DTLSStaticLibraryPath)') and Exists('$(_DTLSNativeStaticLinkerResponsePath)')">
+    <ReadLinesFromFile File="$(_DTLSNativeStaticLinkerResponsePath)">
+      <Output TaskParameter="Lines" ItemName="LinkerArg" />
+    </ReadLinesFromFile>
+  </Target>
+
+  <Target Name="_DTLSExcludeDynamicNativeLibraryFromAotPublish" AfterTargets="ComputeResolvedFilesToPublishList" Condition="'$(PublishAot)' == 'true' and '$(_DTLSDynamicLibraryFileName)' != ''">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(ResolvedFileToPublish.Filename)%(ResolvedFileToPublish.Extension)' == '$(_DTLSDynamicLibraryFileName)'" />
+    </ItemGroup>
+  </Target>
+
+</Project>

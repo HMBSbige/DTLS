@@ -11,6 +11,7 @@
     <RepositoryUrl>https://github.com/HMBSbige/DTLS</RepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <DisableRuntimeMarshalling>true</DisableRuntimeMarshalling>
+    <DTLSNativeAssetsPath Condition="'$(DTLSNativeAssetsPath)' == ''">$(MSBuildThisFileDirectory)../../artifacts/native</DTLSNativeAssetsPath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -18,7 +19,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="runtimes/**/*" Pack="true" PackagePath="runtimes" />
+    <None Include="$(DTLSNativeAssetsPath)/**/*" Pack="true" PackagePath="runtimes" />
+    <None Update="buildTransitive/**/*" Pack="true" PackagePath="%(Identity)" />
     <None Include="../../README.md" Pack="true" PackagePath="" />
   </ItemGroup>
 

@@ -1,8 +1,10 @@
 <Solution>
   <Folder Name="/CI/">
-    <File Path=".github/workflows/build-native.yml" />
     <File Path=".github/workflows/ci.yml" />
+    <File Path=".github/workflows/package.yml" />
     <File Path=".github/workflows/release.yml" />
+    <File Path="scripts/build-native.ps1" />
+    <File Path="scripts/test-native-aot.ps1" />
   </Folder>
   <Folder Name="/Solution Items/">
     <File Path=".editorconfig" />
@@ -18,6 +20,7 @@
     <Project Path="src/DTLS/DTLS.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/DTLS.NativeAotSmoke/DTLS.NativeAotSmoke.csproj" />
     <Project Path="tests/DTLS.Tests/DTLS.Tests.csproj" />
   </Folder>
 </Solution>

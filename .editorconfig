@@ -50,6 +50,9 @@ indent_size = 2
 [*.props]
 indent_size = 2
 
+[*.targets]
+indent_size = 2
+
 # c# 文件
 [*.cs]
 
