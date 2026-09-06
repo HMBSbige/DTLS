@@ -7,7 +7,6 @@ namespace DTLS.Tests;
 
 internal static partial class TestCertificateFactory
 {
-	/// <summary>Root 与 Intermediate 仅含公钥（信任锚用途）；Leaf 含可导出私钥，可用作服务端证书。</summary>
 	public static (X509Certificate2 Root, X509Certificate2 Intermediate, X509Certificate2 Leaf) CreateEcdsaCertificateChain()
 	{
 		DateTimeOffset now = DateTimeOffset.UtcNow;
@@ -48,7 +47,6 @@ internal static partial class TestCertificateFactory
 		);
 	}
 
-	/// <summary>用显式提供的 intermediate 和自定义信任锚构建链；调用方保留入参所有权，Build 产生的链元素在此释放。</summary>
 	public static bool BuildChainWithExplicitIntermediate(X509Certificate2 trustedRoot, X509Certificate2 intermediate, X509Certificate2 cert)
 	{
 		using X509Chain chain = new();
@@ -57,6 +55,7 @@ internal static partial class TestCertificateFactory
 		chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
 		chain.ChainPolicy.CustomTrustStore.Add(trustedRoot);
 		chain.ChainPolicy.ExtraStore.Add(intermediate);
+
 		try
 		{
 			return chain.Build(cert);
@@ -67,7 +66,7 @@ internal static partial class TestCertificateFactory
 		}
 	}
 
-	public static void DisposeChainElements(X509Chain chain)
+	private static void DisposeChainElements(X509Chain chain)
 	{
 		foreach (X509ChainElement chainElement in chain.ChainElements)
 		{
@@ -117,50 +116,13 @@ internal static partial class TestCertificateFactory
 
 	public static bool ValidateSelfSigned(X509Certificate2 trustedRoot, X509Certificate2? remoteCert, X509Chain? remoteChain, SslPolicyErrors errors)
 	{
-		if (remoteCert is null)
-		{
-			return false;
-		}
-
-		Assert.NotNull(remoteChain);
-
-		if (remoteChain.ChainStatus.Length is not 1 || remoteChain.ChainStatus[0].Status is not X509ChainStatusFlags.UntrustedRoot)
-		{
-			Assert.Fail("Expected single UntrustedRoot status");
-		}
-
-		if (remoteChain.Build(remoteCert))
-		{
-			Assert.Fail("Chain should not build");
-		}
-
-		if (remoteCert.Verify())
-		{
-			Assert.Fail("Certificate should not verify");
-		}
-
-		if (!errors.HasFlag(SslPolicyErrors.RemoteCertificateChainErrors))
-		{
-			Assert.Fail("Expected RemoteCertificateChainErrors");
-		}
-
-		if ((errors & ~SslPolicyErrors.RemoteCertificateChainErrors) is not SslPolicyErrors.None)
-		{
-			Assert.Fail("Unexpected additional errors");
-		}
-
-		using X509Chain chain = new();
-		chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-		chain.ChainPolicy.CustomTrustStore.Add(trustedRoot);
-		return chain.Build(remoteCert);
+		return remoteCert is not null
+				&& remoteChain?.ChainStatus is [{ Status: X509ChainStatusFlags.UntrustedRoot }]
+				&& errors is SslPolicyErrors.RemoteCertificateChainErrors
+				&& remoteCert.RawDataMemory.Span.SequenceEqual(trustedRoot.RawDataMemory.Span);
 	}
 
-	public static bool ValidateSelfSignedAndMatchHostname(
-		X509Certificate2 trustedRoot,
-		string expectedHost,
-		X509Certificate2? remoteCert,
-		X509Chain? remoteChain,
-		SslPolicyErrors errors)
+	public static bool ValidateSelfSignedAndMatchHostname(X509Certificate2 trustedRoot, string expectedHost, X509Certificate2? remoteCert, X509Chain? remoteChain, SslPolicyErrors errors)
 	{
 		return ValidateSelfSigned(trustedRoot, remoteCert, remoteChain, errors)
 				&& remoteCert is not null

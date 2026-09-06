@@ -28,6 +28,15 @@ await Task.WhenAll
 	server.HandshakeAsync(cancellationTokenSource.Token).AsTask()
 );
 
+using X509Certificate2? remoteCertificate = client.Session.GetRemoteCertificate();
+if (client.Session.Protocol is not DtlsVersion.Dtls13
+	|| server.Session.Protocol is not DtlsVersion.Dtls13
+	|| remoteCertificate is null
+	|| !remoteCertificate.RawDataMemory.Span.SequenceEqual(certificate.RawDataMemory.Span))
+{
+	throw new InvalidOperationException("DTLS NativeAOT peer authentication failed.");
+}
+
 byte[] expected = "NativeAOT DTLS smoke test"u8.ToArray();
 await client.SendAsync(expected, cancellationTokenSource.Token);
 

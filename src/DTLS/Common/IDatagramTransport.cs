@@ -1,11 +1,10 @@
 namespace DTLS.Common;
 
-/// <summary>
-/// Low-level datagram transport abstraction for DTLS.
-/// Preserves message boundaries (unlike <see cref="System.IO.Pipelines.IDuplexPipe"/>).
-/// </summary>
 public interface IDatagramTransport
 {
+	/// <summary>Returns one complete datagram's byte count, or 0 when closed.</summary>
+	/// <remarks>Datagrams must not be truncated.</remarks>
 	ValueTask<int> ReceiveAsync(Memory<byte> buffer, CancellationToken cancellationToken = default);
+
 	ValueTask SendAsync(ReadOnlyMemory<byte> datagram, CancellationToken cancellationToken = default);
 }

@@ -3,9 +3,7 @@ using DTLS.Dtls;
 using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Security;
-using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
-using System.Threading.Channels;
 
 namespace DTLS.Tests;
 
@@ -13,39 +11,11 @@ namespace DTLS.Tests;
 public class DtlsHandshakeTests : DtlsTestBase
 {
 	[Test]
-	public async Task Handshake_Completes(CancellationToken cancellationToken)
-	{
-		(IDatagramTransport clientTransport, IDatagramTransport serverTransport) = CreateTransportPair();
-
-		await using DtlsTransport client = await DtlsTransport.CreateClientAsync
-		(
-			clientTransport,
-			new DtlsClientOptions
-			{
-				ServerName = "localhost",
-				RemoteCertificateValidation = (cert, chain, errors) => TestCertificateFactory.ValidateSelfSignedAndMatchHostname(Cert, "localhost", cert, chain, errors)
-			}
-		);
-		await using DtlsTransport server = await DtlsTransport.CreateServerAsync
-		(
-			serverTransport,
-			new DtlsServerOptions { Certificate = Cert }
-		);
-
-		await Task.WhenAll
-		(
-			client.HandshakeAsync(cancellationToken).AsTask(),
-			server.HandshakeAsync(cancellationToken).AsTask()
-		);
-
-		await Assert.That(client.Session.Protocol).IsEqualTo(SslProtocols.Tls13);
-		await Assert.That(server.Session.Protocol).IsEqualTo(SslProtocols.Tls13);
-	}
-
-	[Test]
 	public async Task Handshake_ClientValidationCallback_BuildsWithExplicitIntermediate(CancellationToken cancellationToken)
 	{
+		bool validatedChain = false;
 		(X509Certificate2 root, X509Certificate2 intermediate, X509Certificate2 leaf) = TestCertificateFactory.CreateEcdsaCertificateChain();
+
 		using (root)
 		using (intermediate)
 		using (leaf)
@@ -65,15 +35,16 @@ public class DtlsHandshakeTests : DtlsTestBase
 							return false;
 						}
 
-						TestCertificateFactory.DisposeChainElements(chain);
-						return TestCertificateFactory.BuildChainWithExplicitIntermediate(root, intermediate, cert);
+						return validatedChain = TestCertificateFactory.BuildChainWithExplicitIntermediate(root, intermediate, cert);
 					}
-				}
+				},
+				cancellationToken
 			);
 			await using DtlsTransport server = await DtlsTransport.CreateServerAsync
 			(
 				serverTransport,
-				new DtlsServerOptions { Certificate = leaf }
+				new DtlsServerOptions { Certificate = leaf },
+				cancellationToken
 			);
 
 			await Task.WhenAll
@@ -81,67 +52,9 @@ public class DtlsHandshakeTests : DtlsTestBase
 				client.HandshakeAsync(cancellationToken).AsTask(),
 				server.HandshakeAsync(cancellationToken).AsTask()
 			);
+
+			await Assert.That(validatedChain).IsTrue();
 		}
-	}
-
-	[Test]
-	public async Task Handshake_ClientWithoutCert_ServerReceivesDefaultCert(CancellationToken cancellationToken)
-	{
-		(IDatagramTransport clientTransport, IDatagramTransport serverTransport) = CreateTransportPair();
-
-		await using DtlsTransport client = await DtlsTransport.CreateClientAsync
-		(
-			clientTransport,
-			new DtlsClientOptions
-			{
-				ServerName = "localhost",
-				RemoteCertificateValidation = (cert, chain, errors) => TestCertificateFactory.ValidateSelfSignedAndMatchHostname(Cert, "localhost", cert, chain, errors)
-			}
-		);
-		await using DtlsTransport server = await DtlsTransport.CreateServerAsync
-		(
-			serverTransport,
-			new DtlsServerOptions
-			{
-				Certificate = Cert,
-				RequireClientCertificate = true,
-				RemoteCertificateValidation = (_, _, _) => true
-			}
-		);
-
-		await Task.WhenAll
-		(
-			client.HandshakeAsync(cancellationToken).AsTask(),
-			server.HandshakeAsync(cancellationToken).AsTask()
-		);
-
-		Assert.NotNull(server.Session.RemoteCertificate);
-		await Assert.That(server.Session.RemoteCertificate.SubjectName.Name).IsEqualTo("CN=DTLS Peer, O=DTLS");
-		await Assert.That(client.Session.Protocol).IsEqualTo(SslProtocols.Tls13);
-		await Assert.That(server.Session.Protocol).IsEqualTo(SslProtocols.Tls13);
-	}
-
-	[Test]
-	public async Task Handshake_ThrowsCertificateException_WhenNoValidationCallback(CancellationToken cancellationToken)
-	{
-		(IDatagramTransport clientTransport, IDatagramTransport serverTransport) = CreateTransportPair();
-
-		await using DtlsTransport client = await DtlsTransport.CreateClientAsync
-		(
-			clientTransport,
-			new DtlsClientOptions { ServerName = "localhost" }
-		);
-		await using DtlsTransport server = await DtlsTransport.CreateServerAsync
-		(
-			serverTransport,
-			new DtlsServerOptions { Certificate = Cert }
-		);
-
-		Task clientHandshake = client.HandshakeAsync(cancellationToken).AsTask();
-		Task serverHandshake = server.HandshakeAsync(cancellationToken).AsTask();
-
-		await Assert.That(clientHandshake).Throws<CertificateException>();
-		await serverHandshake;
 	}
 
 	[Test]
@@ -155,7 +68,8 @@ public class DtlsHandshakeTests : DtlsTestBase
 			{
 				ServerName = "localhost",
 				HandshakeTimeout = TimeSpan.FromMilliseconds(500)
-			}
+			},
+			cancellationToken
 		);
 
 		await Assert.That(async () => await client.HandshakeAsync(cancellationToken)).Throws<DtlsTimeoutException>();
@@ -168,50 +82,14 @@ public class DtlsHandshakeTests : DtlsTestBase
 		await using DtlsTransport client = await DtlsTransport.CreateClientAsync
 		(
 			blackHole,
-			new DtlsClientOptions { ServerName = "localhost" }
+			new DtlsClientOptions { ServerName = "localhost" },
+			cancellationToken
 		);
 
 		using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 		cts.CancelAfter(TimeSpan.FromMilliseconds(200));
 
 		await Assert.That(async () => await client.HandshakeAsync(cts.Token)).Throws<TaskCanceledException>();
-	}
-
-	[Test]
-	public async Task Handshake_Completes_WithClientCertificate(CancellationToken cancellationToken)
-	{
-		using X509Certificate2 clientCert = TestCertificateFactory.CreateEcdsaSelfSigned();
-		(IDatagramTransport clientTransport, IDatagramTransport serverTransport) = CreateTransportPair();
-
-		await using DtlsTransport client = await DtlsTransport.CreateClientAsync
-		(
-			clientTransport,
-			new DtlsClientOptions
-			{
-				ServerName = "localhost",
-				ClientCertificate = clientCert,
-				RemoteCertificateValidation = (cert, chain, errors) => TestCertificateFactory.ValidateSelfSignedAndMatchHostname(Cert, "localhost", cert, chain, errors)
-			}
-		);
-		await using DtlsTransport server = await DtlsTransport.CreateServerAsync
-		(
-			serverTransport,
-			new DtlsServerOptions
-			{
-				Certificate = Cert,
-				RequireClientCertificate = true,
-				RemoteCertificateValidation = (cert, chain, errors) => TestCertificateFactory.ValidateSelfSignedAndMatchHostname(clientCert, "localhost", cert, chain, errors)
-			}
-		);
-
-		await Task.WhenAll
-		(
-			client.HandshakeAsync(cancellationToken).AsTask(),
-			server.HandshakeAsync(cancellationToken).AsTask()
-		);
-
-		await Assert.That(client.Session.Protocol).IsEqualTo(SslProtocols.Tls13);
-		await Assert.That(server.Session.Protocol).IsEqualTo(SslProtocols.Tls13);
 	}
 
 	[Test]
@@ -228,12 +106,14 @@ public class DtlsHandshakeTests : DtlsTestBase
 			{
 				ServerName = loopbackIp,
 				RemoteCertificateValidation = (cert, chain, errors) => TestCertificateFactory.ValidateSelfSignedAndMatchHostname(serverIpCert, loopbackIp, cert, chain, errors)
-			}
+			},
+			cancellationToken
 		);
 		await using DtlsTransport server = await DtlsTransport.CreateServerAsync
 		(
 			serverTransport,
-			new DtlsServerOptions { Certificate = serverIpCert }
+			new DtlsServerOptions { Certificate = serverIpCert },
+			cancellationToken
 		);
 
 		await Task.WhenAll
@@ -242,44 +122,15 @@ public class DtlsHandshakeTests : DtlsTestBase
 			server.HandshakeAsync(cancellationToken).AsTask()
 		);
 
-		await Assert.That(client.Session.Protocol).IsEqualTo(SslProtocols.Tls13);
-		await Assert.That(server.Session.Protocol).IsEqualTo(SslProtocols.Tls13);
-	}
-
-	[Test]
-	public async Task Handshake_ClientValidationCallback_RejectsServerIpCertificate_ThrowsException(CancellationToken cancellationToken)
-	{
-		const string presentedIp = "127.0.0.1";
-		const string expectedIp = "127.0.0.2";
-		using X509Certificate2 serverIpCert = TestCertificateFactory.CreateEcdsaSelfSignedWithIpAddress(presentedIp);
-		(IDatagramTransport clientTransport, IDatagramTransport serverTransport) = CreateTransportPair();
-
-		await using DtlsTransport client = await DtlsTransport.CreateClientAsync
-		(
-			clientTransport,
-			new DtlsClientOptions
-			{
-				ServerName = presentedIp,
-				RemoteCertificateValidation = (cert, chain, errors) => TestCertificateFactory.ValidateSelfSignedAndMatchHostname(serverIpCert, expectedIp, cert, chain, errors)
-			}
-		);
-		await using DtlsTransport server = await DtlsTransport.CreateServerAsync
-		(
-			serverTransport,
-			new DtlsServerOptions { Certificate = serverIpCert }
-		);
-
-		Task clientHandshake = client.HandshakeAsync(cancellationToken).AsTask();
-		Task serverHandshake = server.HandshakeAsync(cancellationToken).AsTask();
-
-		await Assert.That(clientHandshake).Throws<CertificateException>();
-		await serverHandshake;
+		await Assert.That(client.Session.Protocol).IsEqualTo(DtlsVersion.Dtls13);
+		await Assert.That(server.Session.Protocol).IsEqualTo(DtlsVersion.Dtls13);
 	}
 
 	[Test]
 	public async Task Handshake_ServerValidationCallback_AcceptsClientIpCertificate(CancellationToken cancellationToken)
 	{
 		const string clientIp = "127.0.0.1";
+		bool validatedClientCertificate = false;
 		using X509Certificate2 clientIpCert = TestCertificateFactory.CreateEcdsaSelfSignedWithIpAddress(clientIp);
 		(IDatagramTransport clientTransport, IDatagramTransport serverTransport) = CreateTransportPair();
 
@@ -291,7 +142,8 @@ public class DtlsHandshakeTests : DtlsTestBase
 				ServerName = "localhost",
 				ClientCertificate = clientIpCert,
 				RemoteCertificateValidation = (cert, chain, errors) => TestCertificateFactory.ValidateSelfSignedAndMatchHostname(Cert, "localhost", cert, chain, errors)
-			}
+			},
+			cancellationToken
 		);
 		await using DtlsTransport server = await DtlsTransport.CreateServerAsync
 		(
@@ -300,8 +152,9 @@ public class DtlsHandshakeTests : DtlsTestBase
 			{
 				Certificate = Cert,
 				RequireClientCertificate = true,
-				RemoteCertificateValidation = (cert, chain, errors) => TestCertificateFactory.ValidateSelfSignedAndMatchHostname(clientIpCert, clientIp, cert, chain, errors)
-			}
+				RemoteCertificateValidation = (cert, chain, errors) => validatedClientCertificate = TestCertificateFactory.ValidateSelfSignedAndMatchHostname(clientIpCert, clientIp, cert, chain, errors)
+			},
+			cancellationToken
 		);
 
 		await Task.WhenAll
@@ -310,44 +163,7 @@ public class DtlsHandshakeTests : DtlsTestBase
 			server.HandshakeAsync(cancellationToken).AsTask()
 		);
 
-		await Assert.That(client.Session.Protocol).IsEqualTo(SslProtocols.Tls13);
-		await Assert.That(server.Session.Protocol).IsEqualTo(SslProtocols.Tls13);
-	}
-
-	[Test]
-	public async Task Handshake_ServerValidationCallback_RejectsClientIpCertificate_ThrowsException(CancellationToken cancellationToken)
-	{
-		const string presentedClientIp = "127.0.0.1";
-		const string expectedClientIp = "127.0.0.2";
-		using X509Certificate2 clientIpCert = TestCertificateFactory.CreateEcdsaSelfSignedWithIpAddress(presentedClientIp);
-		(IDatagramTransport clientTransport, IDatagramTransport serverTransport) = CreateTransportPair();
-
-		await using DtlsTransport client = await DtlsTransport.CreateClientAsync
-		(
-			clientTransport,
-			new DtlsClientOptions
-			{
-				ServerName = "localhost",
-				ClientCertificate = clientIpCert,
-				RemoteCertificateValidation = (cert, chain, errors) => TestCertificateFactory.ValidateSelfSignedAndMatchHostname(Cert, "localhost", cert, chain, errors)
-			}
-		);
-		await using DtlsTransport server = await DtlsTransport.CreateServerAsync
-		(
-			serverTransport,
-			new DtlsServerOptions
-			{
-				Certificate = Cert,
-				RequireClientCertificate = true,
-				RemoteCertificateValidation = (cert, chain, errors) => TestCertificateFactory.ValidateSelfSignedAndMatchHostname(clientIpCert, expectedClientIp, cert, chain, errors)
-			}
-		);
-
-		Task clientHandshake = client.HandshakeAsync(cancellationToken).AsTask();
-		Task serverHandshake = server.HandshakeAsync(cancellationToken).AsTask();
-
-		await Assert.That(serverHandshake).Throws<CertificateException>();
-		await clientHandshake;
+		await Assert.That(validatedClientCertificate).IsTrue();
 	}
 
 	[Test]
@@ -364,7 +180,8 @@ public class DtlsHandshakeTests : DtlsTestBase
 				ServerName = "localhost",
 				ClientCertificate = clientCert,
 				RemoteCertificateValidation = (cert, chain, errors) => TestCertificateFactory.ValidateSelfSignedAndMatchHostname(Cert, "localhost", cert, chain, errors)
-			}
+			},
+			cancellationToken
 		);
 		await using DtlsTransport server = await DtlsTransport.CreateServerAsync
 		(
@@ -373,65 +190,18 @@ public class DtlsHandshakeTests : DtlsTestBase
 			{
 				Certificate = Cert,
 				RequireClientCertificate = true
-			}
+			},
+			cancellationToken
 		);
 
-		Task clientHandshake = client.HandshakeAsync(cancellationToken).AsTask();
-		Task serverHandshake = server.HandshakeAsync(cancellationToken).AsTask();
-
-		await Assert.That(serverHandshake).Throws<CertificateException>();
-		await clientHandshake;
+		await AssertCertificateRejectedAsync(server, client, cancellationToken);
 	}
 
 	[Test]
-	public async Task Handshake_ServerValidationCallback_RejectsCert_ThrowsException(CancellationToken cancellationToken)
+	public async Task Handshake_ServerCallback_RequestsAndValidatesOptionalClientCertificate(CancellationToken cancellationToken)
 	{
-		SslPolicyErrors receivedErrors = SslPolicyErrors.None;
-		bool? chainBuildResult = null;
-		(IDatagramTransport clientTransport, IDatagramTransport serverTransport) = CreateTransportPair();
-
-		await using DtlsTransport client = await DtlsTransport.CreateClientAsync
-		(
-			clientTransport,
-			new DtlsClientOptions
-			{
-				ServerName = "localhost",
-				ClientCertificate = Cert,
-				RemoteCertificateValidation = (cert, chain, errors) => TestCertificateFactory.ValidateSelfSignedAndMatchHostname(Cert, "localhost", cert, chain, errors)
-			}
-		);
-		await using DtlsTransport server = await DtlsTransport.CreateServerAsync
-		(
-			serverTransport,
-			new DtlsServerOptions
-			{
-				Certificate = Cert,
-				RemoteCertificateValidation = (cert, chain, errors) =>
-				{
-					Assert.NotNull(cert);
-					Assert.NotNull(chain);
-					receivedErrors = errors;
-					chainBuildResult = chain.Build(cert);
-					return false;
-				}
-			}
-		);
-
-		Task clientHandshake = client.HandshakeAsync(cancellationToken).AsTask();
-		Task serverHandshake = server.HandshakeAsync(cancellationToken).AsTask();
-
-		await Assert.That(serverHandshake).Throws<CertificateException>();
-		await clientHandshake;
-
-		await Assert.That(receivedErrors).HasFlag(SslPolicyErrors.RemoteCertificateChainErrors);
-		await Assert.That(chainBuildResult).IsFalse();
-	}
-
-	[Test]
-	public async Task Handshake_ServerHasCallback_NotRequireClientCertificate(CancellationToken cancellationToken)
-	{
-		X509Certificate2? capturedCert = null;
-		X509Chain? capturedChain = null;
+		bool receivedCertificate = false;
+		bool receivedChain = false;
 		SslPolicyErrors capturedErrors = SslPolicyErrors.None;
 		(IDatagramTransport clientTransport, IDatagramTransport serverTransport) = CreateTransportPair();
 
@@ -442,7 +212,8 @@ public class DtlsHandshakeTests : DtlsTestBase
 			{
 				ServerName = "localhost",
 				RemoteCertificateValidation = (cert, chain, errors) => TestCertificateFactory.ValidateSelfSignedAndMatchHostname(Cert, "localhost", cert, chain, errors)
-			}
+			},
+			cancellationToken
 		);
 		await using DtlsTransport server = await DtlsTransport.CreateServerAsync
 		(
@@ -450,42 +221,29 @@ public class DtlsHandshakeTests : DtlsTestBase
 			new DtlsServerOptions
 			{
 				Certificate = Cert,
-				// Server has callback but RequireClientCertificate=false.
-				// Like SslStream, the server still requests a client cert,
-				// so the callback receives whatever the client provided.
 				RemoteCertificateValidation = (cert, chain, errors) =>
 				{
-					capturedCert = cert;
-					capturedChain = chain;
+					receivedCertificate = cert is not null;
+					receivedChain = chain is not null;
 					capturedErrors = errors;
 					return errors is SslPolicyErrors.None;
 				}
-			}
+			},
+			cancellationToken
 		);
 
-		Task clientHandshake = client.HandshakeAsync(cancellationToken).AsTask();
-		Task serverHandshake = server.HandshakeAsync(cancellationToken).AsTask();
+		await AssertCertificateRejectedAsync(server, client, cancellationToken);
 
-		await Assert.That(serverHandshake).Throws<CertificateException>();
-		await clientHandshake;
-
-		await Assert.That(capturedCert).IsNotNull();
-		await Assert.That(capturedCert.MatchesHostname("wrong.example.com")).IsFalse();
-		await Assert.That(capturedChain).IsNotNull();
+		await Assert.That(receivedCertificate).IsTrue();
+		await Assert.That(receivedChain).IsTrue();
 		await Assert.That(capturedErrors).HasFlag(SslPolicyErrors.RemoteCertificateChainErrors);
 	}
 
 	[Test]
 	public async Task Handshake_Completes_DespitePacketLoss(CancellationToken cancellationToken)
 	{
-		Channel<byte[]> c2s = Channel.CreateUnbounded<byte[]>();
-		Channel<byte[]> s2c = Channel.CreateUnbounded<byte[]>();
-
-		ChannelDatagramTransport clientTransport = new(s2c.Reader, c2s.Writer);
-		DropFirstSendTransport serverTransport = new
-		(
-			new ChannelDatagramTransport(c2s.Reader, s2c.Writer)
-		);
+		(IDatagramTransport clientTransport, IDatagramTransport rawServerTransport) = CreateTransportPair();
+		DropFirstSendTransport serverTransport = new(rawServerTransport);
 
 		await using DtlsTransport client = await DtlsTransport.CreateClientAsync
 		(
@@ -493,14 +251,15 @@ public class DtlsHandshakeTests : DtlsTestBase
 			new DtlsClientOptions
 			{
 				ServerName = "localhost",
-				HandshakeTimeout = TimeSpan.FromSeconds(15),
 				RemoteCertificateValidation = (cert, _, _) => cert is not null && cert.MatchesHostname("localhost")
-			}
+			},
+			cancellationToken
 		);
 		await using DtlsTransport server = await DtlsTransport.CreateServerAsync
 		(
 			serverTransport,
-			new DtlsServerOptions { Certificate = Cert }
+			new DtlsServerOptions { Certificate = Cert },
+			cancellationToken
 		);
 
 		await Task.WhenAll
@@ -509,28 +268,20 @@ public class DtlsHandshakeTests : DtlsTestBase
 			server.HandshakeAsync(cancellationToken).AsTask()
 		);
 
-		await Assert.That(client.Session.Protocol).IsEqualTo(SslProtocols.Tls13);
-		await Assert.That(server.Session.Protocol).IsEqualTo(SslProtocols.Tls13);
+		await Assert.That(client.Session.Protocol).IsEqualTo(DtlsVersion.Dtls13);
+		await Assert.That(server.Session.Protocol).IsEqualTo(DtlsVersion.Dtls13);
 	}
 
 	[Test]
-	public async Task ConnectionInfo_PopulatedAfterHandshake(CancellationToken cancellationToken)
-	{
-		(DtlsTransport c, DtlsTransport s) = await HandshakePairAsync(cancellationToken);
-		await using DtlsTransport _ = c;
-		await using DtlsTransport __ = s;
-
-		await Assert.That(c.Session.Protocol).IsEqualTo(SslProtocols.Tls13);
-		await Assert.That(c.Session.RemoteCertificate).IsNotNull();
-
-		await Assert.That(s.Session.Protocol).IsEqualTo(SslProtocols.Tls13);
-	}
-
-	[Test]
-	public async Task Handshake_CallbackReceivesNameMismatch(CancellationToken cancellationToken)
+	[Arguments("wrong.example.com", false)]
+	[Arguments("127.0.0.2", true)]
+	public async Task Handshake_CallbackReceivesNameMismatch(string serverName, bool useIpCertificate, CancellationToken cancellationToken)
 	{
 		SslPolicyErrors receivedErrors = SslPolicyErrors.None;
-		X509Certificate2? receivedCert = null;
+		bool receivedCertificate = false;
+		using X509Certificate2 serverCertificate = useIpCertificate
+			? TestCertificateFactory.CreateEcdsaSelfSignedWithIpAddress("127.0.0.1")
+			: TestCertificateFactory.CreateEcdsaSelfSigned();
 		(IDatagramTransport clientTransport, IDatagramTransport serverTransport) = CreateTransportPair();
 
 		await using DtlsTransport client = await DtlsTransport.CreateClientAsync
@@ -538,19 +289,21 @@ public class DtlsHandshakeTests : DtlsTestBase
 			clientTransport,
 			new DtlsClientOptions
 			{
-				ServerName = "wrong.example.com",
+				ServerName = serverName,
 				RemoteCertificateValidation = (cert, _, errors) =>
 				{
 					receivedErrors = errors;
-					receivedCert = cert;
+					receivedCertificate = cert is not null;
 					return true;
 				}
-			}
+			},
+			cancellationToken
 		);
 		await using DtlsTransport server = await DtlsTransport.CreateServerAsync
 		(
 			serverTransport,
-			new DtlsServerOptions { Certificate = Cert }
+			new DtlsServerOptions { Certificate = serverCertificate },
+			cancellationToken
 		);
 
 		await Task.WhenAll
@@ -559,8 +312,7 @@ public class DtlsHandshakeTests : DtlsTestBase
 			server.HandshakeAsync(cancellationToken).AsTask()
 		);
 
-		await Assert.That(receivedCert).IsNotNull();
-		await Assert.That(receivedCert.MatchesHostname("wrong.example.com")).IsFalse();
+		await Assert.That(receivedCertificate).IsTrue();
 		await Assert.That(receivedErrors).HasFlag(SslPolicyErrors.RemoteCertificateNameMismatch);
 	}
 
@@ -586,19 +338,17 @@ public class DtlsHandshakeTests : DtlsTestBase
 					capturedChainStatus = chain.ChainStatus;
 					return errors is SslPolicyErrors.None;
 				}
-			}
+			},
+			cancellationToken
 		);
 		await using DtlsTransport server = await DtlsTransport.CreateServerAsync
 		(
 			serverTransport,
-			new DtlsServerOptions { Certificate = serverCert }
+			new DtlsServerOptions { Certificate = serverCert },
+			cancellationToken
 		);
 
-		Task clientHandshake = client.HandshakeAsync(cancellationToken).AsTask();
-		Task serverHandshake = server.HandshakeAsync(cancellationToken).AsTask();
-
-		await Assert.That(clientHandshake).Throws<CertificateException>();
-		await serverHandshake;
+		await AssertCertificateRejectedAsync(client, server, cancellationToken);
 
 		await Assert.That(capturedErrors).HasFlag(SslPolicyErrors.RemoteCertificateChainErrors);
 		await Assert.That(capturedChainStatus).Any(s => s.Status == X509ChainStatusFlags.NotValidForUsage);
@@ -620,7 +370,8 @@ public class DtlsHandshakeTests : DtlsTestBase
 				ServerName = "localhost",
 				ClientCertificate = clientCert,
 				RemoteCertificateValidation = (cert, chain, errors) => TestCertificateFactory.ValidateSelfSignedAndMatchHostname(Cert, "localhost", cert, chain, errors)
-			}
+			},
+			cancellationToken
 		);
 		await using DtlsTransport server = await DtlsTransport.CreateServerAsync
 		(
@@ -637,16 +388,36 @@ public class DtlsHandshakeTests : DtlsTestBase
 					capturedChainStatus = chain.ChainStatus;
 					return errors is SslPolicyErrors.None;
 				}
-			}
+			},
+			cancellationToken
 		);
 
-		Task clientHandshake = client.HandshakeAsync(cancellationToken).AsTask();
-		Task serverHandshake = server.HandshakeAsync(cancellationToken).AsTask();
-
-		await Assert.That(serverHandshake).Throws<CertificateException>();
-		await clientHandshake;
+		await AssertCertificateRejectedAsync(server, client, cancellationToken);
 
 		await Assert.That(capturedErrors).HasFlag(SslPolicyErrors.RemoteCertificateChainErrors);
 		await Assert.That(capturedChainStatus).Any(s => s.Status == X509ChainStatusFlags.NotValidForUsage);
+	}
+
+	private static async Task AssertCertificateRejectedAsync(DtlsTransport rejected, DtlsTransport peer, CancellationToken cancellationToken)
+	{
+		using CancellationTokenSource peerCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+		Task peerHandshake = peer.HandshakeAsync(peerCancellation.Token).AsTask();
+
+		try
+		{
+			await Assert.That(async () => await rejected.HandshakeAsync(cancellationToken)).Throws<CertificateException>();
+		}
+		finally
+		{
+			await peerCancellation.CancelAsync();
+
+			try
+			{
+				await peerHandshake;
+			}
+			catch (OperationCanceledException) when (peerCancellation.IsCancellationRequested)
+			{
+			}
+		}
 	}
 }

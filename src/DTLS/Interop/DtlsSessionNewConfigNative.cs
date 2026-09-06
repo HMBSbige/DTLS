@@ -10,6 +10,7 @@ internal struct DtlsSessionNewConfigNative
 	public nint KeyDer;
 	public nuint KeyLen;
 	public byte IsClient;
-	public uint Version;
+	public uint MinVersion;
+	public uint MaxVersion;
 	public byte RequireClientCertificate;
 }

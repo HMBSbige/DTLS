@@ -14,7 +14,7 @@ public abstract class DtlsTestBase : IDisposable
 		GC.SuppressFinalize(this);
 	}
 
-	protected async Task<(DtlsTransport Client, DtlsTransport Server)> HandshakePairAsync(CancellationToken cancellationToken = default)
+	protected async Task<(DtlsTransport Client, DtlsTransport Server)> HandshakePairAsync(CancellationToken cancellationToken, DtlsVersion? version = null)
 	{
 		(IDatagramTransport clientTransport, IDatagramTransport serverTransport) = CreateTransportPair();
 		DtlsTransport client = await DtlsTransport.CreateClientAsync
@@ -23,21 +23,36 @@ public abstract class DtlsTestBase : IDisposable
 			new DtlsClientOptions
 			{
 				ServerName = "localhost",
+				MinVersion = version,
+				MaxVersion = version,
 				RemoteCertificateValidation = (_, _, _) => true
-			}
+			},
+			cancellationToken
 		);
-		DtlsTransport server = await DtlsTransport.CreateServerAsync
-		(
-			serverTransport,
-			new DtlsServerOptions { Certificate = Cert }
-		);
+		DtlsTransport? server = null;
 
-		await Task.WhenAll
-		(
-			client.HandshakeAsync(cancellationToken).AsTask(),
-			server.HandshakeAsync(cancellationToken).AsTask()
-		);
-		return (client, server);
+		try
+		{
+			server = await DtlsTransport.CreateServerAsync
+			(
+				serverTransport,
+				new DtlsServerOptions { Certificate = Cert, MinVersion = version, MaxVersion = version },
+				cancellationToken
+			);
+
+			await Task.WhenAll
+			(
+				client.HandshakeAsync(cancellationToken).AsTask(),
+				server.HandshakeAsync(cancellationToken).AsTask()
+			);
+			return (client, server);
+		}
+		catch
+		{
+			server?.Dispose();
+			client.Dispose();
+			throw;
+		}
 	}
 
 	protected static (IDatagramTransport client, IDatagramTransport server) CreateTransportPair()
@@ -45,30 +60,30 @@ public abstract class DtlsTestBase : IDisposable
 		return ChannelDatagramTransport.CreatePair();
 	}
 
-	/// <summary>
-	/// 驱动 <paramref name="peer"/> 的 ReceiveAsync 直到 <c>IsPeerClosed</c> 置位，然后取消并等待。
-	/// RFC 9147 §5.10 下对端 close_notify 不会自动 EOF，必须由调用方轮询状态。
-	/// </summary>
+	// DTLS 1.3 close_notify leaves ReceiveAsync waiting for reordered application data.
 	protected static async Task DrivePeerCloseAsync(DtlsTransport peer, CancellationToken cancellationToken)
 	{
 		using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-		Task recv = Task.Run(async () =>
+		Task recv = peer.ReceiveAsync(new byte[1024], cts.Token).AsTask();
+
+		try
 		{
+			while (!peer.Session.IsPeerClosed)
+			{
+				await Task.Delay(10, cancellationToken);
+			}
+		}
+		finally
+		{
+			await cts.CancelAsync();
+
 			try
 			{
-				await peer.ReceiveAsync(new byte[1024], cts.Token);
+				await recv;
 			}
-			catch (OperationCanceledException)
+			catch (OperationCanceledException) when (cts.IsCancellationRequested)
 			{
 			}
-		}, cancellationToken);
-
-		while (!peer.Session.IsPeerClosed)
-		{
-			await Task.Delay(10, cancellationToken);
 		}
-
-		cts.Cancel();
-		await recv;
 	}
 }

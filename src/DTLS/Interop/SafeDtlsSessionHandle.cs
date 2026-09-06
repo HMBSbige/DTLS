@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace DTLS.Interop;
 
-internal sealed class SafeDtlsSessionHandle(nint handle) : SafeHandle(handle, true)
+internal sealed class SafeDtlsSessionHandle() : SafeHandle(nint.Zero, true)
 {
 	public override bool IsInvalid => handle == nint.Zero;
 

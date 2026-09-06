@@ -1,19 +1,21 @@
 using DTLS.Common;
+using DTLS.Interop;
 using System.Buffers;
 using System.Buffers.Binary;
 
 namespace DTLS.Dtls;
 
-/// <summary>
-/// Async I/O wrapper over <see cref="DtlsSession"/>.
-/// Bridges the sans-I/O protocol engine with an <see cref="IDatagramTransport"/>.
-/// </summary>
+/// <remarks>
+/// Complete <see cref="HandshakeAsync"/> before exchanging application data.
+/// The caller owns the underlying transport.
+/// </remarks>
 public sealed class DtlsTransport : IDatagramTransport, IAsyncDisposable, IDisposable
 {
 	private const int IoBufferSize = 65536;
+	private static readonly TimeSpan MaximumTimeout = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
 	private readonly TimeSpan _handshakeTimeout;
 	private bool _disposed;
-	private byte[]? _cachedCloseNotify;
+	private byte[]? _closeNotify;
 	private bool _closeNotifySent;
 
 	public IDatagramTransport InnerTransport { get; }
@@ -27,179 +29,118 @@ public sealed class DtlsTransport : IDatagramTransport, IAsyncDisposable, IDispo
 		_handshakeTimeout = handshakeTimeout;
 	}
 
-	// ── Factory methods ──────────────────────────────────────
-
-	public static async ValueTask<DtlsTransport> CreateClientAsync(IDatagramTransport transport, DtlsClientOptions options)
+	public static ValueTask<DtlsTransport> CreateClientAsync(IDatagramTransport transport, DtlsClientOptions options, CancellationToken cancellationToken = default)
 	{
-		byte[] buf = ArrayPool<byte>.Shared.Rent(IoBufferSize);
-
-		try
-		{
-			(DtlsSession session, DtlsOpResult result) = DtlsSession.CreateClient(options, buf);
-			await SendFramedAsync(transport, buf.AsMemory(0, result.BytesWritten));
-			return new DtlsTransport(session, transport, options.HandshakeTimeout);
-		}
-		finally
-		{
-			ArrayPool<byte>.Shared.Return(buf);
-		}
+		return CreateAsync(transport, options, DtlsSession.CreateClient, cancellationToken);
 	}
 
-	public static async ValueTask<DtlsTransport> CreateServerAsync(IDatagramTransport transport, DtlsServerOptions options)
+	public static ValueTask<DtlsTransport> CreateServerAsync(IDatagramTransport transport, DtlsServerOptions options, CancellationToken cancellationToken = default)
 	{
-		byte[] buf = ArrayPool<byte>.Shared.Rent(IoBufferSize);
-
-		try
-		{
-			(DtlsSession session, DtlsOpResult result) = DtlsSession.CreateServer(options, buf);
-			await SendFramedAsync(transport, buf.AsMemory(0, result.BytesWritten));
-			return new DtlsTransport(session, transport, options.HandshakeTimeout);
-		}
-		finally
-		{
-			ArrayPool<byte>.Shared.Return(buf);
-		}
+		return CreateAsync(transport, options, DtlsSession.CreateServer, cancellationToken);
 	}
-
-	// ── Handshake ────────────────────────────────────────────
 
 	public async ValueTask HandshakeAsync(CancellationToken cancellationToken = default)
 	{
 		ObjectDisposedException.ThrowIf(_disposed, this);
+		Session.ThrowIfUnavailable();
+		cancellationToken.ThrowIfCancellationRequested();
 
-		using CancellationTokenSource cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-		cancellationTokenSource.CancelAfter(_handshakeTimeout);
-		CancellationToken token = cancellationTokenSource.Token;
+		if (Session.IsLocalClosed)
+		{
+			throw new DtlsException(DtlsResult.DtlsError, "Cannot handshake a closed DTLS session.");
+		}
 
-		byte[] buf = ArrayPool<byte>.Shared.Rent(IoBufferSize);
+		if (!Session.IsHandshaking)
+		{
+			return;
+		}
+
+		using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+		timeout.CancelAfter(_handshakeTimeout);
+		byte[] buffer = ArrayPool<byte>.Shared.Rent(IoBufferSize);
 
 		try
 		{
 			while (Session.IsHandshaking)
 			{
-				DtlsOpResult op;
-
-				if (Session.TimeoutMs >= 0)
+				if (!await ReceiveAndFeedAsync(buffer, timeout.Token))
 				{
-					using CancellationTokenSource innerCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(token);
-					innerCancellationTokenSource.CancelAfter(TimeSpan.FromMilliseconds(Math.Max(Session.TimeoutMs, 1)));
-
-					try
-					{
-						op = Session.Feed(buf.AsSpan(0, await ReceiveOrThrow(buf, innerCancellationTokenSource.Token)), buf);
-					}
-					catch (OperationCanceledException) when (!token.IsCancellationRequested)
-					{
-						op = Session.HandleTimeout(buf);
-					}
+					throw new DtlsException(DtlsResult.DtlsError, "Transport closed during the DTLS handshake.");
 				}
-				else
-				{
-					op = Session.Feed(buf.AsSpan(0, await ReceiveOrThrow(buf, token)), buf);
-				}
-
-				await SendFramedAsync(InnerTransport, buf.AsMemory(0, op.BytesWritten), token);
 			}
 		}
-		catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+		catch (OperationCanceledException exception) when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
 		{
-			throw new DtlsTimeoutException("DTLS handshake timed out.");
+			throw new DtlsTimeoutException("DTLS handshake timed out.", exception);
 		}
 		finally
 		{
-			ArrayPool<byte>.Shared.Return(buf);
+			ArrayPool<byte>.Shared.Return(buffer);
 		}
-
-		Session.VerifyPeer();
 	}
-
-	// ── IDatagramTransport ──────────────────────────────────
 
 	public async ValueTask SendAsync(ReadOnlyMemory<byte> datagram, CancellationToken cancellationToken = default)
 	{
 		ObjectDisposedException.ThrowIf(_disposed, this);
-
-		byte[] buf = ArrayPool<byte>.Shared.Rent(IoBufferSize);
+		cancellationToken.ThrowIfCancellationRequested();
+		byte[] buffer = ArrayPool<byte>.Shared.Rent(IoBufferSize);
 
 		try
 		{
-			DtlsOpResult op = Session.Send(datagram.Span, buf);
-			await SendFramedAsync(InnerTransport, buf.AsMemory(0, op.BytesWritten), cancellationToken);
+			DtlsOpResult result = Session.Send(datagram.Span, buffer);
+			await SendFramedAsync(InnerTransport, buffer.AsMemory(0, result.BytesWritten), cancellationToken);
 		}
 		finally
 		{
-			ArrayPool<byte>.Shared.Return(buf);
+			ArrayPool<byte>.Shared.Return(buffer);
 		}
 	}
 
 	public async ValueTask<int> ReceiveAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
 	{
 		ObjectDisposedException.ThrowIf(_disposed, this);
+		cancellationToken.ThrowIfCancellationRequested();
+		if (Session.TryReceive(buffer.Span, out int bytesRead))
+		{
+			return bytesRead;
+		}
 
-		byte[] buf = ArrayPool<byte>.Shared.Rent(IoBufferSize);
+		byte[] ioBuffer = ArrayPool<byte>.Shared.Rent(IoBufferSize);
 
 		try
 		{
-			while (true)
+			do
 			{
-				DtlsOpResult r = Session.TryReceive(buffer.Span);
-
-				if (r.BytesRead > 0)
-				{
-					return r.BytesRead;
-				}
-
-				int n = await InnerTransport.ReceiveAsync(buf, cancellationToken);
-
-				if (n is 0)
+				if (!await ReceiveAndFeedAsync(ioBuffer, cancellationToken))
 				{
 					return 0;
 				}
+			} while (!Session.TryReceive(buffer.Span, out bytesRead));
 
-				DtlsOpResult op = Session.Feed(buf.AsSpan(0, n), buf);
-				await SendFramedAsync(InnerTransport, buf.AsMemory(0, op.BytesWritten), cancellationToken);
-			}
+			return bytesRead;
 		}
 		finally
 		{
-			ArrayPool<byte>.Shared.Return(buf);
+			ArrayPool<byte>.Shared.Return(ioBuffer);
 		}
 	}
 
-	/// <summary>
-	/// 发起优雅关闭：发送 <c>close_notify</c> 告警并刷新输出。
-	/// 不等待对端的 close_notify 应答。
-	/// </summary>
+	/// <summary>Sends <c>close_notify</c> without waiting for the peer. Failed sends can be retried.</summary>
 	public async ValueTask CloseAsync(CancellationToken cancellationToken = default)
 	{
 		ObjectDisposedException.ThrowIf(_disposed, this);
+		cancellationToken.ThrowIfCancellationRequested();
 
 		if (_closeNotifySent)
 		{
 			return;
 		}
 
-		if (_cachedCloseNotify is null)
-		{
-			byte[] buf = ArrayPool<byte>.Shared.Rent(IoBufferSize);
-			try
-			{
-				DtlsOpResult op = Session.Close(buf);
-				// dimpl 刷出的单个 datagram 除 close_notify 外可能携带已排队的控制记录，沿用 IoBufferSize 缓冲。
-				_cachedCloseNotify = buf.AsSpan(0, op.BytesWritten).ToArray();
-			}
-			finally
-			{
-				ArrayPool<byte>.Shared.Return(buf);
-			}
-		}
-
-		await SendFramedAsync(InnerTransport, _cachedCloseNotify!, cancellationToken);
+		_closeNotify ??= CreateCloseNotify();
+		await SendFramedAsync(InnerTransport, _closeNotify, cancellationToken);
 		_closeNotifySent = true;
-		_cachedCloseNotify = null;
+		_closeNotify = null;
 	}
-
-	// ── Dispose ─────────────────────────────────────────────
 
 	public void Dispose()
 	{
@@ -209,6 +150,7 @@ public sealed class DtlsTransport : IDatagramTransport, IAsyncDisposable, IDispo
 		}
 
 		_disposed = true;
+		_closeNotify = null;
 		Session.Dispose();
 	}
 
@@ -218,37 +160,104 @@ public sealed class DtlsTransport : IDatagramTransport, IAsyncDisposable, IDispo
 		return ValueTask.CompletedTask;
 	}
 
-	// ── Private helpers ─────────────────────────────────────
+	private delegate (DtlsSession Session, DtlsOpResult Result) SessionFactory<in TOptions>(TOptions options, Span<byte> output);
 
-	private async ValueTask<int> ReceiveOrThrow(byte[] buf, CancellationToken cancellationToken = default)
+	private static async ValueTask<DtlsTransport> CreateAsync<TOptions>(IDatagramTransport transport, TOptions options, SessionFactory<TOptions> createSession, CancellationToken cancellationToken) where TOptions : DtlsOptions
 	{
-		int n = await InnerTransport.ReceiveAsync(buf, cancellationToken);
+		ArgumentNullException.ThrowIfNull(transport);
+		ArgumentNullException.ThrowIfNull(options);
 
-		if (n > 0)
+		if (options.HandshakeTimeout != Timeout.InfiniteTimeSpan)
 		{
-			return n;
+			ArgumentOutOfRangeException.ThrowIfLessThan(options.HandshakeTimeout, TimeSpan.Zero, nameof(options.HandshakeTimeout));
+			ArgumentOutOfRangeException.ThrowIfGreaterThan(options.HandshakeTimeout, MaximumTimeout, nameof(options.HandshakeTimeout));
 		}
 
-		throw new DtlsException
-		(
-			Interop.DtlsResult.DtlsError,
-			"Transport closed during handshake"
-		);
+		cancellationToken.ThrowIfCancellationRequested();
+		byte[] buffer = ArrayPool<byte>.Shared.Rent(IoBufferSize);
+		DtlsSession? session = null;
+
+		try
+		{
+			(session, DtlsOpResult result) = createSession(options, buffer);
+			await SendFramedAsync(transport, buffer.AsMemory(0, result.BytesWritten), cancellationToken);
+			return new DtlsTransport(session, transport, options.HandshakeTimeout);
+		}
+		catch
+		{
+			session?.Dispose();
+			throw;
+		}
+		finally
+		{
+			ArrayPool<byte>.Shared.Return(buffer);
+		}
 	}
 
-	private static async ValueTask SendFramedAsync(IDatagramTransport transport, ReadOnlyMemory<byte> framed, CancellationToken cancellationToken = default)
+	private async ValueTask<bool> ReceiveAndFeedAsync(byte[] buffer, CancellationToken cancellationToken)
 	{
-		while (BinaryPrimitives.TryReadUInt16LittleEndian(framed.Span, out ushort len))
-		{
-			framed = framed.Slice(sizeof(ushort));
+		using CancellationTokenSource? timeout = CreateReceiveTimeout(cancellationToken);
+		int? bytesRead = null;
 
-			if (len > framed.Length)
+		try
+		{
+			bytesRead = await InnerTransport.ReceiveAsync(buffer, timeout?.Token ?? cancellationToken);
+		}
+		catch (OperationCanceledException) when (timeout is { IsCancellationRequested: true } && !cancellationToken.IsCancellationRequested)
+		{
+		}
+
+		if (bytesRead is 0)
+		{
+			return false;
+		}
+
+		DtlsOpResult result = bytesRead is { } count
+			? Session.Feed(buffer.AsSpan(0, count), buffer)
+			: Session.HandleTimeout(buffer);
+		await SendFramedAsync(InnerTransport, buffer.AsMemory(0, result.BytesWritten), cancellationToken);
+		return true;
+	}
+
+	private CancellationTokenSource? CreateReceiveTimeout(CancellationToken cancellationToken)
+	{
+		if (Session.Timeout is not { } delay)
+		{
+			return null;
+		}
+
+		CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+		timeout.CancelAfter(TimeSpan.FromMilliseconds(Math.Clamp(delay.TotalMilliseconds, 1, MaximumTimeout.TotalMilliseconds)));
+		return timeout;
+	}
+
+	private byte[] CreateCloseNotify()
+	{
+		byte[] buffer = ArrayPool<byte>.Shared.Rent(IoBufferSize);
+
+		try
+		{
+			DtlsOpResult result = Session.Close(buffer);
+			return buffer.AsSpan(0, result.BytesWritten).ToArray();
+		}
+		finally
+		{
+			ArrayPool<byte>.Shared.Return(buffer);
+		}
+	}
+
+	private static async ValueTask SendFramedAsync(IDatagramTransport transport, ReadOnlyMemory<byte> framed, CancellationToken cancellationToken)
+	{
+		while (!framed.IsEmpty)
+		{
+			if (!BinaryPrimitives.TryReadUInt16LittleEndian(framed.Span, out ushort length) || length > framed.Length - sizeof(ushort))
 			{
-				break;
+				throw new InvalidDataException("The DTLS session returned an incomplete datagram frame.");
 			}
 
-			await transport.SendAsync(framed.Slice(0, len), cancellationToken);
-			framed = framed.Slice(len);
+			cancellationToken.ThrowIfCancellationRequested();
+			await transport.SendAsync(framed.Slice(sizeof(ushort), length), cancellationToken);
+			framed = framed.Slice(sizeof(ushort) + length);
 		}
 	}
 }

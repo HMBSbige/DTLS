@@ -2,7 +2,6 @@ using DTLS.Dtls;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
-using System.Security.Authentication;
 using System.Text;
 
 namespace DTLS.Tests;
@@ -59,7 +58,7 @@ public class WolfSslInteropTests : InteropTestBase
 		{
 			(string certPath, string keyPath) = ExportPem(Cert, tmpDir);
 			int port = GetFreeUdpPort();
-			// -u = DTLS, -v 4 = 1.3, -d = skip peer verify, -e = echo
+			// -u -v 4: DTLS 1.3; -d: skip peer verification; -e: echo.
 			using Process? server = Process.Start
 			(
 				new ProcessStartInfo
@@ -77,7 +76,7 @@ public class WolfSslInteropTests : InteropTestBase
 
 			try
 			{
-				await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);// Give server time to start
+				await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
 
 				using UdpClient udp = new();
 				UdpDatagramTransport transport = new(udp, new IPEndPoint(IPAddress.Loopback, port));
@@ -89,16 +88,16 @@ public class WolfSslInteropTests : InteropTestBase
 					{
 						ServerName = "localhost",
 						RemoteCertificateValidation = (cert, chain, errors) => TestCertificateFactory.ValidateSelfSigned(Cert, cert, chain, errors)
-					}
+					},
+					cancellationToken
 				);
 
 				using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 				cts.CancelAfter(TimeSpan.FromSeconds(3));
 
 				await client.HandshakeAsync(cts.Token);
-				await Assert.That(client.Session.Protocol).IsEqualTo(SslProtocols.Tls13);
+				await Assert.That(client.Session.Protocol).IsEqualTo(DtlsVersion.Dtls13);
 
-				// send → receive echo
 				Memory<byte> payload = new byte[256];
 				Random.Shared.NextBytes(payload.Span);
 
@@ -131,10 +130,11 @@ public class WolfSslInteropTests : InteropTestBase
 		await using DtlsTransport dtlsServer = await DtlsTransport.CreateServerAsync
 		(
 			transport,
-			new DtlsServerOptions { Certificate = Cert }
+			new DtlsServerOptions { Certificate = Cert },
+			cancellationToken
 		);
 
-		// -u = DTLS, -v 4 = 1.3, -d = skip peer verify
+		// -u -v 4: DTLS 1.3; -d: skip peer verification.
 		using Process? wolfClient = Process.Start
 		(
 			new ProcessStartInfo

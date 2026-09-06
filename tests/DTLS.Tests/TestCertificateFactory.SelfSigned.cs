@@ -3,6 +3,7 @@ using System.Security.Cryptography.X509Certificates;
 
 namespace DTLS.Tests;
 
+// ReSharper disable once PartialTypeWithSinglePart
 internal static partial class TestCertificateFactory
 {
 	public static X509Certificate2 CreateEcdsaSelfSigned()

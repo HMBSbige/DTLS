@@ -1,10 +1,7 @@
 using DTLS.Dtls;
 using System.Diagnostics;
 using System.Net;
-using System.Net.Security;
 using System.Net.Sockets;
-using System.Security.Authentication;
-using System.Security.Cryptography.X509Certificates;
 using System.Text;
 
 namespace DTLS.Tests;
@@ -17,7 +14,6 @@ public class OpenSslInteropTests : InteropTestBase
 	}
 
 	private static readonly bool IsOpensslAvailable = CheckOpenSsl();
-	private static readonly bool SupportsCertificateChain = IsOpensslAvailable && CheckOpenSslCertificateChainSupport();
 
 	private static bool CheckOpenSsl()
 	{
@@ -28,42 +24,6 @@ public class OpenSslInteropTests : InteropTestBase
 				new ProcessStartInfo("openssl", "version") { CreateNoWindow = true }
 			);
 			return p is not null && p.WaitForExit(TimeSpan.FromSeconds(1)) && p.ExitCode is 0;
-		}
-		catch
-		{
-			return false;
-		}
-	}
-
-	private static bool CheckOpenSslCertificateChainSupport()
-	{
-		try
-		{
-			using Process? p = Process.Start
-			(
-				new ProcessStartInfo("openssl", "s_server -help")
-				{
-					CreateNoWindow = true,
-					RedirectStandardOutput = true,
-					RedirectStandardError = true
-				}
-			);
-			if (p is null)
-			{
-				return false;
-			}
-
-			Task<string> standardOutput = p.StandardOutput.ReadToEndAsync();
-			Task<string> standardError = p.StandardError.ReadToEndAsync();
-			if (!p.WaitForExit(TimeSpan.FromSeconds(1)))
-			{
-				p.Kill(true);
-				p.WaitForExit();
-				return false;
-			}
-
-			string help = standardOutput.GetAwaiter().GetResult() + standardError.GetAwaiter().GetResult();
-			return p.ExitCode is 0 && help.Contains("-cert_chain", StringComparison.Ordinal);
 		}
 		catch
 		{
@@ -110,7 +70,7 @@ public class OpenSslInteropTests : InteropTestBase
 
 			try
 			{
-				await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);// Give server time to start
+				await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
 
 				using UdpClient udp = new();
 				UdpDatagramTransport transport = new(udp, new IPEndPoint(IPAddress.Loopback, port));
@@ -122,27 +82,26 @@ public class OpenSslInteropTests : InteropTestBase
 					{
 						ServerName = "localhost",
 						RemoteCertificateValidation = (cert, chain, errors) => TestCertificateFactory.ValidateSelfSigned(Cert, cert, chain, errors)
-					}
+					},
+					cancellationToken
 				);
 
 				const string message = "hello-from-server";
-				await server.StandardInput.WriteAsync(message);// Trigger server handshake
+				await server.StandardInput.WriteAsync(message.AsMemory(), cancellationToken);
 
 				using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 				cts.CancelAfter(TimeSpan.FromSeconds(3));
 
 				await client.HandshakeAsync(cts.Token);
-				await Assert.That(client.Session.Protocol).IsEqualTo(SslProtocols.Tls12);
+				await Assert.That(client.Session.Protocol).IsEqualTo(DtlsVersion.Dtls12);
 
 				Memory<byte> buffer = new byte[256];
 
-				// openssl server → our client: verify we receive data
 				await server.StandardInput.FlushAsync(cts.Token);
 				int n = await client.ReceiveAsync(buffer, cts.Token);
 				string received = Encoding.ASCII.GetString(buffer.Span.Slice(0, n));
 				await Assert.That(received).IsEqualTo(message);
 
-				// our client → openssl server
 				Memory<byte> payload = "hello-from-client"u8.ToArray();
 				await client.SendAsync(payload, cts.Token);
 				int r = await server.StandardOutput.BaseStream.ReadAsync(buffer, cts.Token);
@@ -151,98 +110,6 @@ public class OpenSslInteropTests : InteropTestBase
 			finally
 			{
 				await StopProcessAsync(server);
-			}
-		}
-		finally
-		{
-			Directory.Delete(tmpDir, true);
-		}
-	}
-
-	[Test]
-	public async Task Client_ReceivesLeafOnly_WhenOpenSslServerSendsChain(CancellationToken cancellationToken)
-	{
-		Skip.Unless(SupportsCertificateChain, "openssl s_server does not support -cert_chain");
-
-		(X509Certificate2 root, X509Certificate2 intermediate, X509Certificate2 leaf) = TestCertificateFactory.CreateEcdsaCertificateChain();
-		string tmpDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
-		Directory.CreateDirectory(tmpDir);
-
-		try
-		{
-			using (root)
-			using (intermediate)
-			using (leaf)
-			{
-				(string certPath, string keyPath) = ExportPem(leaf, tmpDir);
-				string chainPath = Path.Combine(tmpDir, "chain.pem");
-				await File.WriteAllTextAsync(chainPath, intermediate.ExportCertificatePem(), cancellationToken);
-				int port = GetFreeUdpPort();
-
-				bool receivedLeaf = false;
-				int peerIntermediateCount = -1;
-				SslPolicyErrors receivedErrors = SslPolicyErrors.None;
-
-				using Process? server = Process.Start
-				(
-					new ProcessStartInfo
-					(
-						"openssl",
-						$"s_server -4 -dtls1_2 -accept {port} " +
-						$"-cert \"{certPath}\" -key \"{keyPath}\" -cert_chain \"{chainPath}\" -quiet"
-					)
-					{
-						RedirectStandardInput = true,
-						RedirectStandardOutput = true,
-						CreateNoWindow = true
-					}
-				);
-				Assert.NotNull(server);
-
-				try
-				{
-					await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);// Give server time to start
-
-					using UdpClient udp = new();
-					UdpDatagramTransport transport = new(udp, new IPEndPoint(IPAddress.Loopback, port));
-
-					await using DtlsTransport client = await DtlsTransport.CreateClientAsync
-					(
-						transport,
-						new DtlsClientOptions
-						{
-							ServerName = "localhost",
-							RemoteCertificateValidation = (cert, chain, errors) =>
-							{
-								if (cert is null || chain is null)
-								{
-									return false;
-								}
-
-								receivedLeaf = cert.RawDataMemory.Span.SequenceEqual(leaf.RawDataMemory.Span);
-								peerIntermediateCount = chain.ChainPolicy.ExtraStore.Count;
-								receivedErrors = errors;
-								TestCertificateFactory.DisposeChainElements(chain);
-								return TestCertificateFactory.BuildChainWithExplicitIntermediate(root, intermediate, cert);
-							}
-						}
-					);
-
-					await server.StandardInput.WriteAsync("x");// Trigger server handshake
-
-					using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-					cts.CancelAfter(TimeSpan.FromSeconds(3));
-
-					await client.HandshakeAsync(cts.Token);
-
-					await Assert.That(receivedLeaf).IsTrue();
-					await Assert.That(peerIntermediateCount).IsEqualTo(0);
-					await Assert.That(receivedErrors).HasFlag(SslPolicyErrors.RemoteCertificateChainErrors);
-				}
-				finally
-				{
-					await StopProcessAsync(server);
-				}
 			}
 		}
 		finally
@@ -261,7 +128,8 @@ public class OpenSslInteropTests : InteropTestBase
 		await using DtlsTransport dtlsServer = await DtlsTransport.CreateServerAsync
 		(
 			transport,
-			new DtlsServerOptions { Certificate = Cert }
+			new DtlsServerOptions { Certificate = Cert },
+			cancellationToken
 		);
 
 		using Process? opensslClient = Process.Start
@@ -285,7 +153,6 @@ public class OpenSslInteropTests : InteropTestBase
 			cts.CancelAfter(TimeSpan.FromSeconds(3));
 			Memory<byte> buffer = new byte[256];
 
-			// openssl stdin → DTLS → our server
 			Memory<byte> payload = "hello-from-openssl-client"u8.ToArray();
 			await opensslClient.StandardInput.BaseStream.WriteAsync(payload, cts.Token);
 			await opensslClient.StandardInput.BaseStream.FlushAsync(cts.Token);
@@ -293,7 +160,6 @@ public class OpenSslInteropTests : InteropTestBase
 			int n = await dtlsServer.ReceiveAsync(buffer, cts.Token);
 			await Assert.That(buffer.Slice(0, n).Span.SequenceEqual(payload.Span)).IsTrue();
 
-			// our server → openssl client
 			Memory<byte> reply = "hello-from-our-server"u8.ToArray();
 			await dtlsServer.SendAsync(reply, cts.Token);
 

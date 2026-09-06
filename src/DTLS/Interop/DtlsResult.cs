@@ -1,9 +1,5 @@
 namespace DTLS.Interop;
 
-/// <summary>
-/// Mirrors the Rust-side DtlsResult enum.
-/// Non-negative values are status codes; negative values are errors.
-/// </summary>
 public enum DtlsResult
 {
 	Ok = 0,

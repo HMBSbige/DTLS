@@ -2,110 +2,68 @@
 
 [![NuGet](https://img.shields.io/nuget/v/DTLS.svg?logo=nuget)](https://www.nuget.org/packages/DTLS)
 
-High-performance DTLS (Datagram Transport Layer Security) library for .NET, powered by a native Rust backend.
-
-- Sans-I/O design for maximum flexibility
-- AOT compatible
-- DTLS 1.2 / 1.3 support
+High-performance DTLS (Datagram Transport Layer Security) library for .NET.
 
 ## Usage
+
+`datagrams` is an `IDatagramTransport` for one peer. Use `cancellationToken` to cancel the operations.
 
 ### Client
 
 ```csharp
-DtlsClientOptions options = new()
-{
-    ServerName = "example.com",
-    RemoteCertificateValidation = (cert, chain, errors) => true,
-};
+using DTLS.Dtls;
+using System.Text;
 
-await using DtlsTransport transport = await DtlsTransport.CreateClientAsync(udpTransport, options);
-await transport.HandshakeAsync();
+DtlsClientOptions options = new() { ServerName = "example.com" };
 
-await transport.SendAsync(data);
-int bytesRead = await transport.ReceiveAsync(buffer);
+using DtlsTransport client = await DtlsTransport.CreateClientAsync(datagrams, options, cancellationToken);
+await client.HandshakeAsync(cancellationToken);
 
-await transport.CloseAsync();
+await client.SendAsync("Hello, DTLS!"u8.ToArray(), cancellationToken);
+
+byte[] buffer = new byte[65536];
+int length = await client.ReceiveAsync(buffer, cancellationToken);
+Console.WriteLine(Encoding.UTF8.GetString(buffer, 0, length));
+
+await client.CloseAsync(cancellationToken);
 ```
+
+Server certificates are validated during the handshake. Set `RemoteCertificateValidation` to customize validation.
 
 ### Server
 
 ```csharp
-DtlsServerOptions options = new()
+using DTLS.Dtls;
+
+DtlsServerOptions options = new() { Certificate = serverCertificate };
+
+using DtlsTransport server = await DtlsTransport.CreateServerAsync(datagrams, options, cancellationToken);
+await server.HandshakeAsync(cancellationToken);
+
+byte[] buffer = new byte[65536];
+int length = await server.ReceiveAsync(buffer, cancellationToken);
+if (length > 0)
 {
-    Certificate = serverCert,
-};
+    await server.SendAsync(buffer.AsMemory(0, length), cancellationToken);
+}
 
-await using DtlsTransport transport = await DtlsTransport.CreateServerAsync(udpTransport, options);
-await transport.HandshakeAsync();
-
-int bytesRead = await transport.ReceiveAsync(buffer);
-await transport.SendAsync(response);
+await server.CloseAsync(cancellationToken);
 ```
+
+`serverCertificate` must contain an exportable ECDSA private key.
+
+Dispose the underlying transport and supplied certificates yourself.
 
 ## API
 
-### IDatagramTransport
-
-Low-level datagram transport abstraction that preserves message boundaries.
-
-```csharp
-public interface IDatagramTransport
-{
-    ValueTask<int> ReceiveAsync(Memory<byte> buffer, CancellationToken cancellationToken = default);
-    ValueTask SendAsync(ReadOnlyMemory<byte> datagram, CancellationToken cancellationToken = default);
-}
-```
-
-### DtlsTransport
-
-Async I/O wrapper that bridges the sans-I/O protocol engine with an `IDatagramTransport`.
-
-| Method              | Description                            |
-| ------------------- | -------------------------------------- |
-| `CreateClientAsync` | Create a DTLS client                   |
-| `CreateServerAsync` | Create a DTLS server                   |
-| `HandshakeAsync`    | Perform DTLS handshake                 |
-| `SendAsync`         | Send encrypted datagram                |
-| `ReceiveAsync`      | Receive decrypted datagram             |
-| `CloseAsync`        | Send `close_notify` for graceful shutdown |
-
-### DtlsSession
-
-Sans-I/O DTLS protocol engine for advanced scenarios.
-
-| Method          | Description                            |
-| --------------- | -------------------------------------- |
-| `CreateClient`  | Create a client session                |
-| `CreateServer`  | Create a server session                |
-| `Feed`          | Feed received data into the engine     |
-| `HandleTimeout` | Handle retransmission timeout          |
-| `Send`          | Encrypt plaintext into output          |
-| `TryReceive`    | Try to read decrypted application data |
-| `Close`         | Queue `close_notify` for graceful shutdown |
-| `VerifyPeer`    | Verify peer certificate                |
-
-### Options
-
-`DtlsClientOptions` — Client configuration:
-
-| Property                      | Description                            |
-| ----------------------------- | -------------------------------------- |
-| `ServerName`                  | Required. Server hostname for SNI      |
-| `ClientCertificate`           | Optional client certificate            |
-| `RemoteCertificateValidation` | Custom certificate validation callback |
-| `HandshakeTimeout`            | Handshake timeout (default 15s)        |
-| `Version`                     | SSL/TLS protocol version               |
-
-`DtlsServerOptions` — Server configuration:
-
-| Property                      | Description                                   |
-| ----------------------------- | --------------------------------------------- |
-| `Certificate`                 | Required. Server certificate with private key |
-| `RemoteCertificateValidation` | Custom certificate validation callback        |
-| `HandshakeTimeout`            | Handshake timeout (default 15s)               |
-| `Version`                     | SSL/TLS protocol version                      |
-| `RequireClientCertificate`    | Whether to require client certificate         |
+| Type | Purpose |
+| --- | --- |
+| [DtlsTransport](src/DTLS/Dtls/DtlsTransport.cs) | Asynchronous handshake, send, receive, and close operations. |
+| [DtlsSession](src/DTLS/Dtls/DtlsSession.cs) | Protocol processing when you manage I/O and timers yourself. |
+| [IDatagramTransport](src/DTLS/Common/IDatagramTransport.cs) | Transport interface that preserves datagram boundaries. |
+| [DtlsClientOptions](src/DTLS/Dtls/DtlsClientOptions.cs) | Server name and optional client certificate. |
+| [DtlsServerOptions](src/DTLS/Dtls/DtlsServerOptions.cs) | Server certificate and client authentication. |
+| [DtlsVersion](src/DTLS/Dtls/DtlsVersion.cs) | Protocol versions for `MinVersion` and `MaxVersion`. |
 
 ## License
 

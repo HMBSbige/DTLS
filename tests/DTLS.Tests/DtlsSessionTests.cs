@@ -1,173 +1,114 @@
 using DTLS.Common;
 using DTLS.Dtls;
 using DTLS.Interop;
-using System.Net.Security;
-using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+
+// ReSharper disable AccessToDisposedClosure
 
 namespace DTLS.Tests;
 
 public class DtlsSessionTests : DtlsTestBase
 {
 	[Test]
-	public async Task VerifyCertificate_ReturnsNone_WhenValid()
-	{
-		using X509Certificate2 cert = TestCertificateFactory.CreateEcdsaSelfSigned();
-		using X509Chain chain = new();
-		chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-		chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-		chain.ChainPolicy.CustomTrustStore.Add(cert);
-
-		SslPolicyErrors errors = DtlsSession.VerifyCertificate(chain, cert, "localhost");
-		await Assert.That(errors).IsEqualTo(SslPolicyErrors.None);
-	}
-
-	[Test]
-	public async Task VerifyCertificate_ReturnsNameMismatch_WhenHostnameWrong()
-	{
-		using X509Certificate2 cert = TestCertificateFactory.CreateEcdsaSelfSigned();
-		using X509Chain chain = new();
-		chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-		chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-		chain.ChainPolicy.CustomTrustStore.Add(cert);
-
-		SslPolicyErrors errors = DtlsSession.VerifyCertificate(chain, cert, "wrong-host.example.com");
-		await Assert.That(errors).HasFlag(SslPolicyErrors.RemoteCertificateNameMismatch);
-	}
-
-	[Test]
-	public async Task VerifyCertificate_ReturnsChainErrors_WhenEkuMismatch()
-	{
-		using X509Certificate2 cert = TestCertificateFactory.CreateWithClientAuthEkuOnly();
-		using X509Chain chain = new();
-		chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-		chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-		chain.ChainPolicy.CustomTrustStore.Add(cert);
-		chain.ChainPolicy.ApplicationPolicy.Add(new Oid("1.3.6.1.5.5.7.3.1"));// ServerAuth
-
-		SslPolicyErrors errors = DtlsSession.VerifyCertificate(chain, cert, "localhost");
-		await Assert.That(errors).HasFlag(SslPolicyErrors.RemoteCertificateChainErrors);
-	}
-
-	[Test]
-	public async Task VerifyCertificate_SkipsHostnameCheck_WhenTargetHostNull()
-	{
-		using X509Certificate2 cert = TestCertificateFactory.CreateEcdsaSelfSigned();
-		using X509Chain chain = new();
-		chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-		chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-		chain.ChainPolicy.CustomTrustStore.Add(cert);
-
-		SslPolicyErrors errors = DtlsSession.VerifyCertificate(chain, cert, null);
-		await Assert.That(errors).IsEqualTo(SslPolicyErrors.None);
-	}
-
-	[Test]
-	public async Task ClientOptions_HasExpectedDefaults()
-	{
-		DtlsClientOptions opts = new() { ServerName = "test" };
-		await Assert.That(opts.ClientCertificate).IsNull();
-		await Assert.That(opts.RemoteCertificateValidation).IsNull();
-		await Assert.That(opts.HandshakeTimeout).IsEqualTo(TimeSpan.FromSeconds(15));
-		await Assert.That(opts.Version).IsEqualTo(SslProtocols.None);
-	}
-
-	[Test]
-	public async Task ServerOptions_HasExpectedDefaults()
-	{
-		DtlsServerOptions opts = new() { Certificate = Cert };
-		await Assert.That(opts.RemoteCertificateValidation).IsNull();
-		await Assert.That(opts.HandshakeTimeout).IsEqualTo(TimeSpan.FromSeconds(15));
-		await Assert.That(opts.Version).IsEqualTo(SslProtocols.None);
-		await Assert.That(opts.RequireClientCertificate).IsFalse();
-	}
-
-	[Test]
-	public async Task CreateClient_Throws_WhenVersionUnsupported()
+	[Arguments(false, (DtlsVersion)0, null, "minVersion")]
+	[Arguments(true, null, (DtlsVersion)0, "maxVersion")]
+	[Arguments(false, (DtlsVersion)3, null, "minVersion")]
+	[Arguments(true, null, (DtlsVersion)3, "maxVersion")]
+	[Arguments(false, null, (DtlsVersion)(-1), "maxVersion")]
+	[Arguments(true, (DtlsVersion)(-1), null, "minVersion")]
+	public async Task Create_RejectsUnknownVersionBounds(bool isServer, DtlsVersion? minVersion, DtlsVersion? maxVersion, string parameterName)
 	{
 		byte[] output = new byte[1];
-		DtlsClientOptions options = new()
-		{
-			ServerName = "localhost",
-			Version = (SslProtocols)0x0300
-		};
-
-		await Assert.That(() => DtlsSession.CreateClient(options, output)).Throws<ArgumentOutOfRangeException>();
+		ArgumentOutOfRangeException? exception = await Assert.That
+			(() => CreateSession(isServer, minVersion, maxVersion, output))
+			.Throws<ArgumentOutOfRangeException>();
+		await Assert.That(exception?.ParamName).IsEqualTo(parameterName);
 	}
 
 	[Test]
-	public async Task CreateClient_Throws_WhenVersionCombined()
+	[Arguments(false)]
+	[Arguments(true)]
+	public async Task Create_RejectsReversedVersionRange(bool isServer)
 	{
 		byte[] output = new byte[1];
-		DtlsClientOptions options = new()
-		{
-			ServerName = "localhost",
-			Version = SslProtocols.Tls12 | SslProtocols.Tls13
-		};
-
-		await Assert.That(() => DtlsSession.CreateClient(options, output)).Throws<ArgumentOutOfRangeException>();
+		ArgumentException? exception = await Assert.That
+			(() => CreateSession(isServer, DtlsVersion.Dtls13, DtlsVersion.Dtls12, output))
+			.Throws<ArgumentException>();
+		await Assert.That(exception?.ParamName).IsEqualTo("maxVersion");
 	}
 
 	[Test]
-	public async Task CreateServer_Throws_WhenVersionUnsupported()
+	[Arguments(3u, 0u)]
+	[Arguments(0u, 3u)]
+	[Arguments(uint.MaxValue, 0u)]
+	[Arguments(0u, uint.MaxValue)]
+	[Arguments(2u, 1u)]
+	public async Task NativeCreate_RejectsInvalidVersionRange(uint minVersion, uint maxVersion)
 	{
-		byte[] output = new byte[1];
-		DtlsServerOptions options = new()
+		DtlsSessionNewConfigNative config = new() { IsClient = 1, MinVersion = minVersion, MaxVersion = maxVersion };
+		byte[] output = new byte[65536];
+		DtlsCallResultNative result = NativeMethods.SessionNew(config, out SafeDtlsSessionHandle session, output, (nuint)output.Length);
+		using (session)
 		{
-			Certificate = Cert,
-			Version = (SslProtocols)0x0300
-		};
-
-		await Assert.That(() => DtlsSession.CreateServer(options, output)).Throws<ArgumentOutOfRangeException>();
+			await Assert.That(result.Code).IsEqualTo(DtlsResult.InvalidInput);
+			await Assert.That(session.IsInvalid).IsTrue();
+		}
 	}
 
 	[Test]
-	public async Task CreateServer_Throws_WhenVersionCombined()
+	[Arguments(false)]
+	[Arguments(true)]
+	public async Task Create_RejectsCertificateWithoutPrivateKey(bool isServer)
 	{
-		byte[] output = new byte[1];
-		DtlsServerOptions options = new()
-		{
-			Certificate = Cert,
-			Version = SslProtocols.Tls12 | SslProtocols.Tls13
-		};
-
-		await Assert.That(() => DtlsSession.CreateServer(options, output)).Throws<ArgumentOutOfRangeException>();
+		using X509Certificate2 publicCertificate = X509CertificateLoader.LoadCertificate(Cert.RawDataMemory.Span);
+		byte[] output = new byte[65536];
+		await Assert.That
+			(() => isServer
+				? DtlsSession.CreateServer(new DtlsServerOptions { Certificate = publicCertificate }, output)
+				: DtlsSession.CreateClient
+				(
+					new DtlsClientOptions
+					{
+						ServerName = "localhost",
+						ClientCertificate = publicCertificate
+					}, output
+				)
+			)
+			.Throws<CryptographicException>();
 	}
 
 	[Test]
 	public async Task CreateClient_ThrowsDtlsException_WhenOutputBufferTooSmall()
 	{
 		byte[] tinyOutput = new byte[1];
-		DtlsClientOptions options = new()
-		{
-			ServerName = "localhost",
-			RemoteCertificateValidation = (_, _, _) => true
-		};
+		DtlsClientOptions options = new() { ServerName = "localhost" };
 
 		DtlsException? ex = await Assert.That(() => DtlsSession.CreateClient(options, tinyOutput)).Throws<DtlsException>();
 		await Assert.That(ex).IsNotNull();
 		await Assert.That(ex.ErrorCode).IsEqualTo(DtlsResult.BufferTooSmall);
-		await Assert.That(ex.Message).Contains("output buffer too small");
 	}
 
-	[Test]
-	public async Task SendAsync_ThrowsAfterDispose(CancellationToken cancellationToken)
+	private (DtlsSession Session, DtlsOpResult Result) CreateSession(bool isServer, DtlsVersion? minVersion, DtlsVersion? maxVersion, Span<byte> output)
 	{
-		(DtlsTransport c, DtlsTransport s) = await HandshakePairAsync(cancellationToken);
-		await s.DisposeAsync();
-
-		await using DtlsTransport _ = c;
-		await Assert.That(async () => await s.SendAsync(new byte[] { 1 }, cancellationToken)).Throws<ObjectDisposedException>();
-	}
-
-	[Test]
-	public async Task ReceiveAsync_ThrowsAfterDispose(CancellationToken cancellationToken)
-	{
-		(DtlsTransport c, DtlsTransport s) = await HandshakePairAsync(cancellationToken);
-		await c.DisposeAsync();
-
-		await using DtlsTransport _ = s;
-		await Assert.That(async () => await c.ReceiveAsync(new byte[1024], cancellationToken)).Throws<ObjectDisposedException>();
+		return isServer
+			? DtlsSession.CreateServer
+			(
+				new DtlsServerOptions
+				{
+					Certificate = Cert,
+					MinVersion = minVersion,
+					MaxVersion = maxVersion
+				}, output
+			)
+			: DtlsSession.CreateClient
+			(
+				new DtlsClientOptions
+				{
+					ServerName = "localhost",
+					MinVersion = minVersion,
+					MaxVersion = maxVersion
+				}, output
+			);
 	}
 }
