@@ -9,7 +9,7 @@ repository = "https://github.com/HMBSbige/DTLS"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-dimpl = { version = "0.7" }
+dimpl = { version = "0.9" }
 
 [profile.release]
 lto = true

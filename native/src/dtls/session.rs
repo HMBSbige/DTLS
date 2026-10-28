@@ -102,19 +102,40 @@ impl DtlsSession {
     }
 
     pub(super) fn process(&mut self, input: SessionInput<'_>) -> Result<(), DtlsError> {
+        self.process_at(input, Instant::now())
+    }
+
+    fn process_at(&mut self, input: SessionInput<'_>, now: Instant) -> Result<(), DtlsError> {
         self.ensure_active()?;
-        let result = match input {
-            SessionInput::Packet(data) if !data.is_empty() => self.dtls.handle_packet(data),
-            SessionInput::ApplicationData(data) if !data.is_empty() => self.dtls.send_application_data(data),
-            SessionInput::Close if !self.local_closed => {
-                let result = self.dtls.close();
-                self.local_closed = result.is_ok();
-                result
+        if let Err(error) = self.apply(input, now) {
+            self.fatal_error = Some(error.clone());
+            return Err(error);
+        }
+        self.drain_output();
+        Ok(())
+    }
+
+    fn apply(&mut self, input: SessionInput<'_>, now: Instant) -> Result<(), DtlsError> {
+        if matches!(input, SessionInput::Close) && !self.local_closed {
+            // 先关闭再推进时钟，避免到期的重传定时器在关闭前再发出握手 flight。
+            self.dtls.close()?;
+            self.local_closed = true;
+            return Ok(self.dtls.handle_timeout(now)?);
+        }
+        // dimpl 按 handle_timeout 设置的逻辑时钟处理输入，例如服务端从收到 ClientHello 时开始计算握手超时。
+        self.dtls.handle_timeout(now)?;
+        match input {
+            SessionInput::Packet(data) if !data.is_empty() => self.dtls.handle_packet(data)?,
+            SessionInput::ApplicationData(data) if !data.is_empty() => {
+                let accepted = self.dtls.send_application_data(data)?;
+                // auto-sense 尚未确定版本时 dimpl 返回 Ok(0) 而不接收数据，按握手前发送处理为致命错误。
+                if accepted < data.len() {
+                    return Err(DtlsError::new(DtlsResult::DtlsError, "handshake pending: DTLS version not yet negotiated"));
+                }
             }
-            _ => Ok(()),
-        };
-        self.record_result(result)?;
-        self.drain_output()
+            _ => {}
+        }
+        Ok(())
     }
 
     pub(super) fn write_outgoing(&mut self, buffer: &mut [u8]) -> Result<usize, DtlsError> {
@@ -171,17 +192,7 @@ impl DtlsSession {
         }
     }
 
-    fn record_result(&mut self, result: Result<(), dimpl::Error>) -> Result<(), DtlsError> {
-        result.map_err(|error| {
-            let error = DtlsError::from(error);
-            self.fatal_error = Some(error.clone());
-            error
-        })
-    }
-
-    fn drain_output(&mut self) -> Result<(), DtlsError> {
-        let result = self.dtls.handle_timeout(Instant::now());
-        self.record_result(result)?;
+    fn drain_output(&mut self) {
         self.next_timeout = None;
         loop {
             match self.dtls.poll_output(&mut self.poll_buffer) {
@@ -203,6 +214,47 @@ impl DtlsSession {
         }
         // dimpl 要等到 poll_output 返回 Timeout 后才更新关闭状态。
         self.local_closed |= self.dtls.is_closed();
-        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    fn new_session(is_client: bool, version: Option<dimpl::ProtocolVersion>) -> DtlsSession {
+        DtlsSession::new(&[], &[], is_client, version, version, false).expect("create session")
+    }
+
+    fn take_outgoing(session: &mut DtlsSession) -> Vec<Vec<u8>> {
+        session.outgoing_packets.drain(..).collect()
+    }
+
+    #[test]
+    fn server_handshake_deadline_starts_at_first_client_hello() {
+        for version in [None, Some(dimpl::ProtocolVersion::DTLS1_2), Some(dimpl::ProtocolVersion::DTLS1_3)] {
+            let mut server = new_session(false, version);
+            let created = Instant::now();
+            server.process_at(SessionInput::Timeout, created).expect("start server");
+
+            // 服务端空闲超过 dimpl 默认的 40 秒握手超时后才收到 ClientHello。
+            let now = created + Duration::from_secs(60);
+            let mut client = new_session(true, version);
+            client.process_at(SessionInput::Timeout, now).expect("start client");
+
+            for _ in 0..16 {
+                for packet in take_outgoing(&mut client) {
+                    server.process_at(SessionInput::Packet(&packet), now).expect("server handles client flight");
+                }
+                for packet in take_outgoing(&mut server) {
+                    client.process_at(SessionInput::Packet(&packet), now).expect("client handles server flight");
+                }
+                if client.handshake_complete && server.handshake_complete {
+                    break;
+                }
+            }
+            assert!(client.handshake_complete && server.handshake_complete, "{version:?} handshake did not complete");
+        }
     }
 }

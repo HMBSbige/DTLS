@@ -298,9 +298,10 @@ public class DtlsDataTransferTests : DtlsTestBase
 			await Task.Delay(timeout + TimeSpan.FromMilliseconds(50), cancellationToken);
 		}
 
-		await Assert.That(async () => await c.CloseAsync(cancellationToken)).Throws<DtlsException>();
+		await c.CloseAsync(cancellationToken);
 
 		await Assert.That(clientTransport.SendCount).IsEqualTo(sendsBeforeClose);
+		await Assert.That(c.Session.IsLocalClosed).IsTrue();
 		await Assert.That(c.Session.IsHandshaking).IsFalse();
 		await Assert.That(c.Session.Timeout).IsNull();
 	}
